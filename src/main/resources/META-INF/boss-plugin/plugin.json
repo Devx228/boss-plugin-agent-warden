@@ -9,6 +9,6 @@
   "type": "panel",
   "description": "Puts an approval and audit layer in front of the MCP tools an agent can call in BOSS. Stands up an MCP endpoint the agent attaches to instead of BOSS's own: records every call, escalates high-risk ones to the operator, refuses changes to the tool surface itself, and exports a session report correlating what the agent did with what actually changed on disk.",
   "author": "Devansh Abhay Dhok",
-  "url": "https://github.com/Devx228/boss-plugin-project-studio",
+  "url": "https://github.com/Devx228/boss-plugin-agent-warden",
   "panel": { "position": "left_bottom", "priority": 60 }
 }

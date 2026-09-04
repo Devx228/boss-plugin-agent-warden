@@ -63,7 +63,7 @@ class WardenDynamicPlugin : DynamicPlugin {
             "Records every call, escalates high-risk ones to you, refuses changes to the tool " +
             "surface itself, and exports a session report you can hand to somebody."
     override val author = "Devansh Abhay Dhok"
-    override val url = "https://github.com/Devx228/boss-plugin-project-studio"
+    override val url = "https://github.com/Devx228/boss-plugin-agent-warden"
 
     private var runtime: WardenRuntime? = null
 

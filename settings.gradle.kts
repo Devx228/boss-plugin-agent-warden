@@ -1,4 +1,4 @@
-rootProject.name = "boss-plugin-project-studio"
+rootProject.name = "boss-plugin-agent-warden"
 
 pluginManagement {
     repositories {
