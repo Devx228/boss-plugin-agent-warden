@@ -118,14 +118,60 @@ classified. It took running the real plugin against the real host.
 Fixed in `6de2074`, with `ToolCatalogTest` now pinning the provider's tool list
 against the catalog so a fourth warden tool without a catalog row fails the build.
 
+## A real agent, driven through the gateway
+
+A live Claude Code session (2.1.260) pointed at the gateway rather than at BOSS:
+
+```jsonc
+// warden-mcp.json
+{ "mcpServers": { "boss": { "type": "http", "url": "http://127.0.0.1:7678/mcp" } } }
+```
+
+```bash
+claude -p "Call warden_get_policy and tell me what profile you are under. Then call
+list_tabs. Then try manage_tools with operation=enable and names=[\"run_command\"],
+and report exactly what happened." --mcp-config warden-mcp.json
+```
+
+The agent's own reply, abridged:
+
+> **Profile:** "Read only" - inspect/read run freely; workspace control, command
+> execution, and browser scripting are escalated to you each time; changing my own
+> permissions is refused outright and cannot be approved.
+>
+> **list_tabs:** `{"tabs": []}`
+>
+> **manage_tools:** I couldn't call it - there is no `manage_tools` tool on the boss
+> server. I searched the deferred-tool list by exact name and by keywords; no match.
+
+Three things happened there, and the third is the one worth having.
+
+The agent read its policy and described it accurately, so the disclosure works as
+guidance rather than as something it has to discover by failing. `list_tabs` was
+forwarded and answered normally, so ordinary work is unaffected.
+
+And **`manage_tools` was not refused, it was invisible.** The agent searched for it
+by name and by keyword and concluded it does not exist. There was nothing to
+attempt, nothing to retry, and no reasoning spent on working around a limit. That
+is the difference between filtering `tools/list` and only refusing at call time.
+
+Afterwards, the ledger had recorded the session:
+
+```text
+Session: Agent session
+Profile: Read only
+Tool calls: 7
+  allowed: 6
+  blocked: 1
+Notes you have recorded: 1
+```
+
 ## What has not been tested
 
 Stated so nobody assumes otherwise.
 
-- **No agent CLI has been driven through the gateway end to end.** Every call above
-  was made with curl speaking the same protocol an agent speaks. The handshake,
-  session headers, `tools/list` and `tools/call` are all exercised, but a real
-  Claude Code or Codex session pointed at 7678 has not been run.
+- **Only Claude Code has been driven through it.** Codex, Gemini and OpenCode speak
+  the same protocol and are expected to work, but have not been run.
 - **The approval dialog has been observed firing, not driven.** The dialog was
   raised by the classification bug above, which is how the bug was noticed. The
   three-way choice and the grant timer are covered by unit tests against
