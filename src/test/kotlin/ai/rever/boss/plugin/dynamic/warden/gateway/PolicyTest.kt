@@ -61,6 +61,28 @@ class PolicyTest {
     }
 
     @Test
+    fun `a ceiling of UNKNOWN still does not auto-allow unclassified tools`() {
+        // Found by mutation testing. The three shipped profiles all sit below UNKNOWN
+        // in the escalation order, so they reach `Ask` through the ordinal comparison
+        // whether or not the explicit UNKNOWN branch exists - which meant deleting
+        // that branch broke nothing any test could see. The branch is what makes the
+        // documented promise ("whatever the ceiling") true, and this is the only
+        // profile shape that can tell the difference.
+        val reckless =
+            Profile(
+                id = "reckless",
+                name = "Reckless",
+                description = "",
+                ceiling = Capability.UNKNOWN,
+                hardDenied = emptySet(),
+            )
+        assertIs<Decision.Ask>(
+            reckless.decide(Capability.UNKNOWN),
+            "a ceiling at UNKNOWN turned unclassified tools into a blanket allow",
+        )
+    }
+
+    @Test
     fun `full access still refuses self-governance`() {
         // The single most important assertion in the suite. If GOVERN were merely
         // "high", the most permissive profile would hand the agent the ability to
