@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "ai.rever.boss.plugin.dynamic"
-version = "0.1.0"   // ← the single source of truth; processResources syncs it into plugin.json
+version = "0.2.0"   // ← the single source of truth; processResources syncs it into plugin.json
 
 java {
     toolchain { languageVersion.set(JavaLanguageVersion.of(17)) }
@@ -83,13 +83,13 @@ dependencies {
 
 // The loadable plugin JAR: compiled classes + the plugin.json manifest.
 tasks.register<Jar>("buildPluginJar") {
-    archiveFileName.set("boss-plugin-project-studio-${version}.jar")
+    archiveFileName.set("boss-plugin-agent-warden-${version}.jar")
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     manifest {
         attributes(
-            "Implementation-Title" to "BOSS Project Studio Plugin",
+            "Implementation-Title" to "BOSS Agent Warden Plugin",
             "Implementation-Version" to version,
-            "Main-Class" to "ai.rever.boss.plugin.dynamic.projectstudio.ProjectStudioDynamicPlugin",
+            "Main-Class" to "ai.rever.boss.plugin.dynamic.warden.WardenDynamicPlugin",
         )
     }
     from(sourceSets.main.get().output)

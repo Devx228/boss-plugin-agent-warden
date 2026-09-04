@@ -1,13 +1,13 @@
 {
   "manifestVersion": 1,
-  "pluginId": "ai.rever.boss.plugin.dynamic.projectstudio",
-  "displayName": "Project Studio",
-  "version": "0.1.0",
+  "pluginId": "ai.rever.boss.plugin.dynamic.warden",
+  "displayName": "Agent Warden",
+  "version": "0.2.0",
   "apiVersion": "1.0.87",
   "minBossVersion": "9.5.0",
-  "mainClass": "ai.rever.boss.plugin.dynamic.projectstudio.ProjectStudioDynamicPlugin",
+  "mainClass": "ai.rever.boss.plugin.dynamic.warden.WardenDynamicPlugin",
   "type": "panel",
-  "description": "A guided workspace for a course or personal project: track Research, Plan, Code, Review, and Final stages, with notes and sources per stage. Exposes MCP tools so an agent running in BOSS's terminal can read and update project state directly.",
+  "description": "Puts an approval and audit layer in front of the MCP tools an agent can call in BOSS. Stands up an MCP endpoint the agent attaches to instead of BOSS's own: records every call, escalates high-risk ones to the operator, refuses changes to the tool surface itself, and exports a session report correlating what the agent did with what actually changed on disk.",
   "author": "Devansh Abhay Dhok",
   "url": "https://github.com/Devx228/boss-plugin-project-studio",
   "panel": { "position": "left_bottom", "priority": 60 }
