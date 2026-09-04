@@ -120,12 +120,35 @@ object ToolCatalog {
             "browser_run_js" to Capability.BROWSER_SCRIPT,
             // Governs the tool surface itself.
             "manage_tools" to Capability.GOVERN,
+            // This plugin's own tools. Classified, not exempted - see below.
+            "warden_get_policy" to Capability.INSPECT,
+            "warden_log_intent" to Capability.INSPECT,
+            "warden_session_summary" to Capability.INSPECT,
         )
 
     /**
-     * [Capability.UNKNOWN] for anything not in [table], including this plugin's own
-     * tools: a gateway that exempted its owner would be the first thing worth
-     * impersonating.
+     * [Capability.UNKNOWN] for anything not in [table].
+     *
+     * **This plugin's own tools are classified here rather than exempted anywhere**,
+     * and the distinction is why they appear as ordinary table rows instead of behind
+     * an `if`. They take the same decision path as every other tool and simply sit at
+     * the lowest tier, which is honest: reading a policy or writing a session note
+     * touches no file, runs no command, and grants nothing.
+     *
+     * An earlier version left them unclassified, reasoning that a gateway exempting
+     * its owner is the first thing worth impersonating. That was the wrong conclusion
+     * from a sound instinct, and running against a live BOSS is what showed it:
+     * `warden_get_policy` resolved to [Capability.UNKNOWN], raised an approval dialog
+     * and blocked, so the one tool whose purpose is telling an agent what it may do
+     * could not be called without interrupting the operator.
+     *
+     * **Known limitation, inherent to classifying by name.** Another plugin
+     * registering a tool called `warden_get_policy`, or `list_tabs`, inherits that
+     * row's capability. Nothing on the MCP wire carries provenance - `tools/list`
+     * returns `name`, `description` and `inputSchema` and no more - so a gateway at
+     * this layer cannot tell two tools of one name apart. The exposure is bounded by
+     * the tier: the rows worth squatting are the ones that grant least, and
+     * [Capability.EXECUTE] upward is escalated whoever claims the name.
      */
     fun capabilityOf(toolName: String): Capability = table[toolName] ?: Capability.UNKNOWN
 
