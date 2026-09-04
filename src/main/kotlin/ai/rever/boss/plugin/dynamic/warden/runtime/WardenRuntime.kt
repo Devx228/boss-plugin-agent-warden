@@ -198,6 +198,23 @@ class WardenRuntime(
         grants.revokeAll()
     }
 
+    /**
+     * Tells the operator that something asked to change the policy over a deep link
+     * and was refused.
+     *
+     * Announced rather than logged quietly: a `boss://` link can be produced by any
+     * program that can ask the OS to open a URL, so an attempt to widen the policy
+     * through one is exactly the event the operator should see.
+     */
+    fun notifyPolicyChangeRefused(requestedProfile: String) {
+        host.notify(
+            "Agent Warden",
+            "Refused a request to switch to '$requestedProfile'. The policy can only be " +
+                "changed from the panel.",
+            isError = true,
+        )
+    }
+
     // ---- sessions ------------------------------------------------------------
 
     fun beginSession(label: String) {

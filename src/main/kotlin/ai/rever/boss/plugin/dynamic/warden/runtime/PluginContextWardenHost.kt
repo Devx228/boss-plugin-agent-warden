@@ -44,8 +44,14 @@ class PluginContextWardenHost(
     private val http: HttpClient =
         HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build()
 
+    /**
+     * Null when no project is open.
+     *
+     * `PluginContext.projectPath` answers `""` rather than `null` in that case, so
+     * the blank check is what makes the type's nullability mean what callers assume.
+     */
     override val projectPath: String?
-        get() = runCatching { context.projectPath }.getOrNull()
+        get() = runCatching { context.projectPath?.takeIf { it.isNotBlank() } }.getOrNull()
 
     override fun fileChanges(): Flow<HostFileChange>? =
         runCatching {
@@ -99,10 +105,14 @@ class PluginContextWardenHost(
      */
     override suspend fun writeReport(fileName: String, content: String): String? {
         val fs = runCatching { context.fileSystemDataProvider }.getOrNull() ?: return null
-        val directory = projectPath ?: runCatching { fs.getHomeDirectory() }.getOrNull() ?: return null
-        val target = "$directory/$REPORT_DIRECTORY/$fileName"
+        val directory =
+            ReportLocation.resolveBaseDirectory(
+                projectPath = projectPath,
+                homeDirectory = runCatching { fs.getHomeDirectory() }.getOrNull(),
+            ) ?: return null
+        val target = ReportLocation.reportPath(directory, fileName)
         return runCatching {
-            fs.createFolder(directory, REPORT_DIRECTORY)
+            fs.createFolder(directory, ReportLocation.DIRECTORY_NAME)
             fs.writeFile(target, content).getOrThrow()
             // Opening is a courtesy, not the job. A failure here must not report the
             // write as failed when the file is sitting on disk.
@@ -212,7 +222,6 @@ class PluginContextWardenHost(
     }
 
     private companion object {
-        const val REPORT_DIRECTORY = ".agent-warden"
         const val CHOICE_ONCE = "once"
         const val CHOICE_WHILE = "while"
         const val CHOICE_DENY = "deny"

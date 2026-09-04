@@ -7,6 +7,7 @@ import ai.rever.boss.plugin.api.PanelId
 import ai.rever.boss.plugin.api.PanelInfo
 import ai.rever.boss.plugin.api.PluginContext
 import ai.rever.boss.plugin.dynamic.warden.runtime.PluginContextWardenHost
+import ai.rever.boss.plugin.dynamic.warden.runtime.WardenDeepLinkHandler
 import ai.rever.boss.plugin.dynamic.warden.runtime.WardenMcpToolProvider
 import ai.rever.boss.plugin.dynamic.warden.runtime.WardenRuntime
 import ai.rever.boss.plugin.dynamic.warden.runtime.WardenSettings
@@ -21,13 +22,26 @@ import compose.icons.feathericons.Shield
 /** Must match `pluginId` in src/main/resources/META-INF/boss-plugin/plugin.json. */
 const val WARDEN_PLUGIN_ID = "ai.rever.boss.plugin.dynamic.warden"
 
+/**
+ * The short id, used by both the panel and the deep-link handler.
+ *
+ * These have to be the same string. `boss://plugin?id=<x>&action=<y>` resolves the
+ * handler by whatever `id` the caller wrote, and a caller reaching for this plugin
+ * writes the panel id - it is what the sidebar shows, what `cli(open_panel)` takes,
+ * and the only id a person ever sees. Registering the handler under the *plugin* id
+ * instead left every link answering "No deep-link action handler registered", with
+ * the caller getting `ok: true` because dispatching succeeded and only the lookup
+ * failed. Found by triggering a real export against a running BOSS.
+ */
+const val WARDEN_PANEL_ID = "agent-warden"
+
 private val logger = BossLogger.forComponent("AgentWarden")
 
 private val settingsJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
 /** Describes the Agent Warden panel: its id, sidebar icon, and default slot. */
 object WardenPanelInfo : PanelInfo {
-    override val id = PanelId("agent-warden", 60)
+    override val id = PanelId(WARDEN_PANEL_ID, 60)
     override val displayName = "Agent Warden"
     override val icon = FeatherIcons.Shield
     override val defaultSlotPosition = left.bottom
@@ -87,6 +101,7 @@ class WardenDynamicPlugin : DynamicPlugin {
                 WardenPanelComponent(componentContext, panelInfo, instance)
             }
             context.registerMcpToolProvider(WardenMcpToolProvider(instance, WARDEN_PLUGIN_ID))
+            context.registerDeepLinkActionHandler(WardenDeepLinkHandler(instance, WARDEN_PANEL_ID))
 
             instance.initialise()
             logger.info(LogCategory.SYSTEM, "Agent Warden registered", emptyMap())

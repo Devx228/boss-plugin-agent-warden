@@ -126,7 +126,7 @@ All three are read-only with respect to the workspace.
 ## Development
 
 ```bash
-./gradlew test                                        # 149 tests
+./gradlew test                                        # 167 tests
 ./gradlew buildPluginJar
 ./gradlew runGatewayHarness --args="read-only true"   # drive the gateway with curl, no BOSS needed
 ```

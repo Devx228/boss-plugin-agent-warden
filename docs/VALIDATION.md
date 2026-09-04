@@ -2,7 +2,7 @@
 
 What has been tested, how, and what has not been.
 
-## Automated: 149 tests
+## Automated: 167 tests
 
 ```bash
 ./gradlew test
@@ -19,7 +19,9 @@ What has been tested, how, and what has not been.
 | `ToolCatalogTest` | 10 | Classification, including the bug found in live testing |
 | `ApprovalCoordinatorTest` | 11 | Serialisation, timeouts, and fail-closed behaviour |
 | `RedactorTest` | 9 | Redaction, written from the leak backwards |
+| `WardenDeepLinksTest` | 11 | Deep-link actions, and the policy change that is refused |
 | `GrantBookTest` | 8 | Expiry against an injected clock, and thread safety |
+| `ReportLocationTest` | 7 | Where reports go when the host answers blank |
 
 Three choices worth explaining.
 
@@ -166,6 +168,32 @@ Tool calls: 7
 Notes you have recorded: 1
 ```
 
+## Report export, and two bugs it found
+
+Export is reachable from `boss://plugin?id=agent-warden&action=end-session`, so it
+can be triggered from the `boss` CLI, from BOSS's own `cli` tool, or from a script,
+rather than only by clicking. Triggered that way against the running plugin, it
+wrote [docs/example-report.md](example-report.md), reproduced from a real session.
+
+Getting there took two fixes, both of which only a live host could have surfaced.
+
+**The deep-link handler was registered under the wrong id.** It used the plugin id,
+but `boss://plugin?id=<x>` resolves by whatever id the caller writes, and a caller
+reaching for this plugin writes the *panel* id: it is what the sidebar shows and
+what `cli(open_panel)` takes. Every link answered "No deep-link action handler
+registered" in the host log while the caller still received `ok: true`, because
+dispatch succeeded and only the lookup failed. A test now pins the two ids together.
+
+**`PluginContext.projectPath` answers `""`, not `null`, when no project is open.**
+So the Elvis fallback to the home directory never fired and the report path became
+`/.agent-warden/...`, which is the filesystem root. The resolution now lives in
+`ReportLocation`, treats every blank candidate as absent, falls back to `user.home`,
+and has seven tests of its own.
+
+One thing worth noticing in the exported report: the arguments column contains
+`token=<redacted>`. That was a real GitHub token shape passed to `editor_read_file`
+during the test, dropped at capture before it reached either the ledger or the file.
+
 ## What has not been tested
 
 Stated so nobody assumes otherwise.
@@ -176,9 +204,6 @@ Stated so nobody assumes otherwise.
   raised by the classification bug above, which is how the bug was noticed. The
   three-way choice and the grant timer are covered by unit tests against
   `ApprovalPrompt`, not by clicking the real dialog.
-- **The report export has not been triggered from the panel.** `SessionReport` has
-  19 tests and `WardenRuntimeTest` covers the export path against a fake host, but
-  no `.md` file has been written by the running plugin.
 - **Windows only.** Nothing platform-specific is used beyond JDK APIs, but it has
   not been run on macOS or Linux.
 - **Single window.** Two BOSS windows would each construct a runtime and the second
