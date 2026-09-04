@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "ai.rever.boss.plugin.dynamic"
-version = "0.1.0"   // ← the single source of truth; processResources syncs it into plugin.json
+version = "0.2.0"   // ← the single source of truth; processResources syncs it into plugin.json
 
 java {
     toolchain { languageVersion.set(JavaLanguageVersion.of(17)) }
@@ -70,17 +70,26 @@ dependencies {
     implementation("com.arkivanov.essenty:lifecycle:2.5.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+
+    // Tests compile against the same api jar the plugin does, and need it at runtime
+    // too (it is compileOnly for the jar, because the host provides it).
+    testImplementation(kotlin("test"))
+    testImplementation(files(localApiJar))
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
+    // BossLogger binds SLF4J. The host supplies a backend at runtime; a standalone
+    // harness or test JVM does not, and BossLogger's <clinit> fails without one.
+    testRuntimeOnly("org.slf4j:slf4j-simple:2.0.16")
 }
 
 // The loadable plugin JAR: compiled classes + the plugin.json manifest.
 tasks.register<Jar>("buildPluginJar") {
-    archiveFileName.set("boss-plugin-project-studio-${version}.jar")
+    archiveFileName.set("boss-plugin-agent-warden-${version}.jar")
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     manifest {
         attributes(
-            "Implementation-Title" to "BOSS Project Studio Plugin",
+            "Implementation-Title" to "BOSS Agent Warden Plugin",
             "Implementation-Version" to version,
-            "Main-Class" to "ai.rever.boss.plugin.dynamic.projectstudio.ProjectStudioDynamicPlugin",
+            "Main-Class" to "ai.rever.boss.plugin.dynamic.warden.WardenDynamicPlugin",
         )
     }
     from(sourceSets.main.get().output)
@@ -97,3 +106,18 @@ tasks.processResources {
 }
 
 tasks.build { dependsOn("buildPluginJar") }
+
+tasks.test {
+    useJUnitPlatform()
+    testLogging { events("passed", "failed", "skipped") }
+}
+
+// Dev-only: runs the gateway standalone against a live BOSS MCP endpoint so the
+// wire behaviour can be exercised with curl without loading the plugin into BOSS.
+// Not part of `build`; see docs/VALIDATION.md.
+tasks.register<JavaExec>("runGatewayHarness") {
+    group = "verification"
+    description = "Start the MCP gateway on 7688 in front of BOSS's endpoint on 7677."
+    mainClass.set("ai.rever.boss.plugin.dynamic.projectstudio.gateway.GatewayHarnessKt")
+    classpath = sourceSets.test.get().runtimeClasspath
+}
