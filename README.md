@@ -91,6 +91,25 @@ Sitting on the wire covers plugin-contributed and built-in tools identically and
 needs cooperation from neither. Verified: `tools/list` through the gateway returns
 all 30 tools a direct connection returns.
 
+That was a guess when this plugin was designed. It is now checked, and it turned
+out to matter more than expected. BossConsole 9.5.11 added a policy engine, an
+operator approval dialog and an operation ledger, which on the face of it makes
+this plugin redundant. All three live inside `McpToolRegistryCore.invoke`, and
+that function opens by looking the tool up in the host registry, so BossTerm's
+built-ins and terminal-tab's `additionalTools` never reach it. The host's own
+policy tables name four shell tools it cannot receive.
+
+The finding is written up in
+[BossConsole#495](https://github.com/risa-labs-inc/BossConsole/issues/495), with
+the host-side record of it in
+[#498](https://github.com/risa-labs-inc/BossConsole/pull/498). In this plugin it
+is `HostGovernanceGap`, and the session report prints how many of a session's
+calls BOSS's own ledger would not hold. It prints "Nothing" when the answer is
+nothing, and it deliberately excludes `browser_run_js`, which is the most
+dangerous tool on the surface and one the host **can** govern, because it is
+registered through the registry. The gateway's value is about placement, not
+about being the only thing that works.
+
 ## Install
 
 Requires BossConsole 9.5.0 or later and `boss-plugin-api` 1.0.87.
@@ -126,7 +145,7 @@ All three are read-only with respect to the workspace.
 ## Development
 
 ```bash
-./gradlew test                                        # 167 tests
+./gradlew test                                        # 179 tests
 ./gradlew buildPluginJar
 ./gradlew runGatewayHarness --args="read-only true"   # drive the gateway with curl, no BOSS needed
 ```

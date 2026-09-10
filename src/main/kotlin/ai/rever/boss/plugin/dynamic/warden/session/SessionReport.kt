@@ -1,6 +1,7 @@
 package ai.rever.boss.plugin.dynamic.warden.session
 
 import ai.rever.boss.plugin.dynamic.warden.gateway.Capability
+import ai.rever.boss.plugin.dynamic.warden.gateway.HostGovernanceGap
 import ai.rever.boss.plugin.dynamic.warden.gateway.Outcome
 import java.time.Instant
 import java.time.ZoneId
@@ -43,6 +44,8 @@ object SessionReport {
             appendGit(snapshot)
             appendLine()
             appendCoverage(snapshot)
+            appendLine()
+            appendHostGap(snapshot)
             appendLine()
             appendHowToRead(snapshot)
         }
@@ -201,6 +204,49 @@ object SessionReport {
             "This list is expected to be non-empty on a workspace with plugins installed. " +
                 "It is shown because each entry costs the operator a prompt, and because a catalog " +
                 "that silently drifted out of date would otherwise look identical to one that is current.",
+        )
+    }
+
+    /**
+     * What BOSS's own governance would not have recorded.
+     *
+     * Printed only when the session actually used such a tool, because a section
+     * asserting this plugin's usefulness on a session that did not demonstrate it
+     * would be advertising rather than evidence. On a read-only session it is absent,
+     * which is the honest answer.
+     */
+    private fun StringBuilder.appendHostGap(s: SessionSnapshot) {
+        appendLine("## What BOSS's own governance would not have seen")
+        appendLine()
+        val tools = HostGovernanceGap.ungovernedToolsIn(s.records)
+        if (tools.isEmpty()) {
+            appendLine(
+                "Nothing. Every tool used in this session is one BOSS's own policy engine and " +
+                    "ledger can act on, so this gateway added a second opinion rather than the " +
+                    "only one.",
+            )
+            return
+        }
+        val calls = HostGovernanceGap.ungovernedCallCount(s.records)
+        appendLine(
+            "$calls of ${s.records.size} call(s), across ${tools.size} tool(s), went to tools " +
+                "BOSS's own approval gate cannot receive. Those calls are in this report because " +
+                "the gateway sits on the wire; they would not appear in BOSS's operation ledger.",
+        )
+        appendLine()
+        for (name in tools) appendLine("- `$name`")
+        appendLine()
+        appendLine(
+            "BOSS's policy engine, approval dialog and ledger all live inside " +
+                "`McpToolRegistryCore.invoke`, which begins by looking the tool up in the host " +
+                "registry. BossTerm serves the terminal tools directly, so they never arrive. " +
+                "See BossConsole#495.",
+        )
+        appendLine()
+        appendLine(
+            "This is a claim about a specific BossConsole version and it can go stale. If the " +
+                "host closes the gap these tools become governed twice, which costs nothing and " +
+                "only makes this section not worth printing.",
         )
     }
 

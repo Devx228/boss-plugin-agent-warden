@@ -118,6 +118,6 @@ tasks.test {
 tasks.register<JavaExec>("runGatewayHarness") {
     group = "verification"
     description = "Start the MCP gateway on 7688 in front of BOSS's endpoint on 7677."
-    mainClass.set("ai.rever.boss.plugin.dynamic.projectstudio.gateway.GatewayHarnessKt")
+    mainClass.set("ai.rever.boss.plugin.dynamic.warden.gateway.GatewayHarnessKt")
     classpath = sourceSets.test.get().runtimeClasspath
 }

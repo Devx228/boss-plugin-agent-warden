@@ -243,4 +243,39 @@ class SessionReportTest {
         val long = snapshot().copy(endedAtMillis = t0 + 7_400_000)
         assertTrue("2h 3m" in render(long), render(long))
     }
+
+    @Test
+    fun `the report names the calls BOSS's own ledger would not hold`() {
+        val out =
+            render(
+                snapshot(
+                    records =
+                        listOf(
+                            record(1, "run_command", Capability.EXECUTE, Outcome.APPROVED),
+                            record(2, "browser_run_js", Capability.BROWSER_SCRIPT, Outcome.ALLOWED),
+                            record(3, "run_command", Capability.EXECUTE, Outcome.ALLOWED),
+                        ),
+                ),
+            )
+        assertTrue("2 of 3 call(s)" in out, out)
+        assertTrue("`run_command`" in out, out)
+        // The counter-example must not be listed: BOSS can govern it, and claiming
+        // otherwise would make the whole section unbelievable.
+        assertFalse("- `browser_run_js`" in out, out)
+        assertTrue("BossConsole#495" in out, out)
+    }
+
+    @Test
+    fun `a session BOSS could have governed says so plainly`() {
+        val out =
+            render(
+                snapshot(
+                    records = listOf(record(1, "editor_read_file", Capability.READ_CONTENT, Outcome.ALLOWED)),
+                ),
+            )
+        // No number, no list, and no implied credit. A section that advertised this
+        // plugin on a session that did not demonstrate it would devalue the ones that do.
+        assertTrue("Nothing." in out, out)
+        assertTrue("a second opinion rather than the only one" in out, out)
+    }
 }
