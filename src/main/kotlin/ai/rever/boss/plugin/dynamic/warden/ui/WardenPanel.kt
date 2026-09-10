@@ -3,6 +3,7 @@ package ai.rever.boss.plugin.dynamic.warden.ui
 import ai.rever.boss.plugin.api.PanelComponentWithUI
 import ai.rever.boss.plugin.api.PanelInfo
 import ai.rever.boss.plugin.dynamic.warden.gateway.Capability
+import ai.rever.boss.plugin.dynamic.warden.gateway.HostGovernanceGap
 import ai.rever.boss.plugin.dynamic.warden.gateway.Outcome
 import ai.rever.boss.plugin.dynamic.warden.gateway.Profile
 import ai.rever.boss.plugin.dynamic.warden.runtime.WardenRuntime
@@ -37,6 +38,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.arkivanov.decompose.ComponentContext
@@ -199,6 +201,20 @@ class WardenPanelComponent(
                     size = 10,
                 )
             }
+            // The one number that says what this gateway adds over BOSS's own policy
+            // engine and ledger, which cannot see the terminal tools. Shown only when
+            // the session actually used one: a row asserting the plugin's usefulness
+            // on a session that did not demonstrate it would be advertising. Same
+            // reason the report's section prints "Nothing" rather than a zero.
+            val ungoverned = HostGovernanceGap.ungovernedCallCount(session.records)
+            if (ungoverned > 0) {
+                Spacer(Modifier.height(6.dp))
+                Label(
+                    "$ungoverned call(s) went to tools BOSS's own approval gate cannot receive.",
+                    color = BossThemeColors.TextSecondary,
+                    size = 10,
+                )
+            }
         }
     }
 
@@ -239,7 +255,13 @@ class WardenPanelComponent(
                                     size = 10,
                                 )
                             }
-                            Label(record.argumentsPreview, color = BossThemeColors.TextSecondary, size = 10, mono = true)
+                            Label(
+                                record.argumentsPreview,
+                                color = BossThemeColors.TextSecondary,
+                                size = 10,
+                                mono = true,
+                                maxLines = 1,
+                            )
                         }
                     }
                 }
@@ -274,6 +296,14 @@ class WardenPanelComponent(
         )
     }
 
+    /**
+     * [maxLines] defaults to unbounded, which is right for the prose labels. The
+     * ledger passes 1: an argument preview is attacker-influenced text of no fixed
+     * length, and a single `run_command` with a long argument list would otherwise
+     * grow its row until it pushed everything else off the panel. Truncating loses
+     * nothing that matters, because the preview is redacted anyway and the full
+     * command is in the terminal it ran in.
+     */
     @Composable
     private fun Label(
         text: String,
@@ -281,6 +311,7 @@ class WardenPanelComponent(
         bold: Boolean = false,
         size: Int = 11,
         mono: Boolean = false,
+        maxLines: Int = Int.MAX_VALUE,
     ) {
         androidx.compose.material.Text(
             text = text,
@@ -288,6 +319,8 @@ class WardenPanelComponent(
             fontSize = size.sp,
             fontWeight = if (bold) FontWeight.SemiBold else FontWeight.Normal,
             fontFamily = if (mono) FontFamily.Monospace else FontFamily.Default,
+            maxLines = maxLines,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 
