@@ -10,6 +10,7 @@ import ai.rever.boss.plugin.dynamic.warden.gateway.ToolCatalog
 import ai.rever.boss.plugin.dynamic.warden.session.SessionRecorder
 import ai.rever.boss.plugin.dynamic.warden.session.SessionReport
 import ai.rever.boss.plugin.dynamic.warden.session.SessionSnapshot
+import ai.rever.boss.plugin.dynamic.warden.trace.TraceLog
 import ai.rever.boss.plugin.logging.BossLogger
 import ai.rever.boss.plugin.logging.LogCategory
 import kotlinx.coroutines.CancellationException
@@ -20,6 +21,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import java.net.URI
+import java.nio.file.Paths
 import java.util.concurrent.atomic.AtomicLong
 
 private val logger = BossLogger.forComponent("WardenRuntime")
@@ -30,6 +32,14 @@ data class WardenStatus(
     val port: Int? = null,
     val settings: WardenSettings = WardenSettings(),
     val lastError: String? = null,
+    /**
+     * Non-null while the durable trace is known to be incomplete.
+     *
+     * Surfaced rather than logged. An operator who believes there is an audit trail
+     * and has none is worse off than one who knows there is none, so a trace that
+     * cannot be written has to reach the panel.
+     */
+    val traceError: String? = null,
 ) {
     val endpoint: String? get() = port?.let { "http://127.0.0.1:$it/mcp" }
     val profile: Profile get() = settings.profile
@@ -73,7 +83,38 @@ class WardenRuntime(
     private var coordinator: ApprovalCoordinator = buildCoordinator(WardenSettings())
 
     /** Exposed so the panel can say "waiting on you" instead of looking frozen. */
-    val pendingApproval get() = coordinator.pending
+    val pendingApproval get() = coordinator.pendingRequests
+
+    /**
+     * The durable half of the record, opened lazily on first use.
+     *
+     * Lazy because the directory depends on the host's project path, which is not
+     * knowable at construction and can be blank; resolving it once at first write
+     * avoids both a constructor that can fail and a path chosen before the host was
+     * ready to answer.
+     */
+    @Volatile
+    private var trace: TraceLog? = null
+
+    private fun traceLog(): TraceLog? {
+        trace?.let { return it }
+        val base =
+            ReportLocation.resolveBaseDirectory(host.projectPath, null)
+                ?: return null
+        val opened =
+            TraceLog(
+                directory = Paths.get(base, ReportLocation.DIRECTORY_NAME),
+                clock = clock,
+                onFault = { message -> _status.value = _status.value.copy(traceError = message) },
+            )
+        trace = opened
+        return opened
+    }
+
+    /** The trace file's path once one has been opened, for the panel to show. */
+    val tracePath: String? get() = trace?.file?.toString()
+
+    private fun sessionId() = recorder.state.value.id
 
     private fun buildCoordinator(settings: WardenSettings) =
         ApprovalCoordinator(
@@ -91,6 +132,35 @@ class WardenRuntime(
             _status.value = _status.value.copy(settings = loaded)
             if (loaded.gatewayEnabled) start()
         }
+        watchForDisable()
+    }
+
+    /**
+     * Closes the gateway if the host disables the plugin without telling it.
+     *
+     * The host calls `dispose()` on unload only. Disabling unregisters the panel and
+     * the tools and stops the sandbox, and never calls in, so a plugin holding a
+     * socket keeps holding it. Measured against 9.5.11: after disabling from the
+     * Toolbox, 7678 was still listening and still forwarding `run_command`, with the
+     * panel gone. See [WardenHost.unregistered].
+     *
+     * The collector runs on `pluginScope`, which belongs to the window rather than to
+     * the plugin and therefore outlives the disable. That is what makes it able to
+     * observe one, and it is also why the flow completes after a single emission
+     * rather than staying subscribed forever.
+     */
+    private fun watchForDisable() {
+        val signal = host.unregistered() ?: return
+        scope.launch {
+            runCatching { signal.collect { onDisabled() } }
+                .onFailure { logger.warn(LogCategory.SYSTEM, "Disable watch ended", emptyMap(), it) }
+        }
+    }
+
+    private fun onDisabled() {
+        logger.info(LogCategory.SYSTEM, "Plugin was disabled; closing the gateway", emptyMap())
+        dispose()
+        _status.value = _status.value.copy(running = false, port = null)
     }
 
     /**
@@ -118,11 +188,20 @@ class WardenRuntime(
                         approve = { tool, capability, preview ->
                             coordinator.requestApproval(tool, capability, preview)
                         },
-                        onRecord = { recorder.record(it) },
+                        onRecord = { record ->
+                            recorder.record(record)
+                            traceLog()?.call(sessionId(), record)
+                        },
+                        onAnswerUndelivered = { tool, reason ->
+                            traceLog()?.undelivered(sessionId(), tool, reason)
+                        },
                         nextRecordId = { recordIds.getAndIncrement() },
                         hiddenCapabilities = {
                             if (settings.hideDeniedTools) _status.value.profile.hardDenied else emptySet()
                         },
+                        // Read from status, not the captured settings, so turning it off
+                        // takes effect without restarting the gateway.
+                        judgeShellCommands = { _status.value.settings.judgeShellCommands },
                     )
                 val port = instance.start(settings.preferredPort)
                 gateway = instance
@@ -175,6 +254,10 @@ class WardenRuntime(
             grants.revokeAll()
             val next = _status.value.settings.copy(profileId = profile.id).sanitised()
             _status.value = _status.value.copy(settings = next)
+            // The open session has to move with it, or its report names the policy the
+            // session opened under while the calls below were decided by this one.
+            recorder.profileChanged(profile.name)
+            traceLog()?.session(sessionId(), "policy is now '${profile.name}'")
             runCatching { settingsStore.save(next) }
                 .onFailure { logger.warn(LogCategory.SYSTEM, "Could not persist profile", emptyMap(), it) }
             logger.info(LogCategory.SYSTEM, "Profile changed", mapOf("profile" to profile.id))
@@ -226,6 +309,7 @@ class WardenRuntime(
                 projectPath = host.projectPath,
                 git = git,
             )
+            traceLog()?.session(sessionId(), "session opened under '${_status.value.profile.name}'")
             reportCoverage()
         }
     }
@@ -234,11 +318,14 @@ class WardenRuntime(
     fun endSessionAndExport() {
         scope.launch {
             val git = runCatching { host.gitSnapshot(recorder.state.value.git) }.getOrNull()
+            val sessionId = sessionId()
             val finished = recorder.end(git)
             if (finished == null) {
                 host.notify("Agent Warden", "No session is open.")
                 return@launch
             }
+            // Read before end(), because end() is what makes it the closed session.
+            traceLog()?.session(sessionId, "session closed after ${finished.records.size} call(s)")
             export(finished)
         }
     }

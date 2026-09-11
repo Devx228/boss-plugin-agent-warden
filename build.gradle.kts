@@ -17,11 +17,17 @@ kotlin {
     compilerOptions { jvmTarget.set(JvmTarget.JVM_17) }
 }
 
-// CI (the risa-labs-inc release workflow) sets CI=true and drops the api jar at
-// build/downloaded-deps/boss-plugin-api.jar itself. Locally there is no sibling
-// boss-plugin-api checkout to build, so fetchBossPluginApiJar pulls the same
-// pinned release jar straight from GitHub Releases into libs/ (gitignored).
-val useLocalDependencies = System.getenv("CI") != "true"
+// Where the api jar comes from, decided by what is actually on disk rather than by
+// an environment variable.
+//
+// The risa-labs-inc release workflow drops it at build/downloaded-deps and used to
+// be detected by CI=true. That is wrong outside the org: GitHub Actions sets CI=true
+// for everybody, so any other repository's build looked for a file only that
+// workflow provides and failed on a machine where the download would have worked
+// perfectly well. Checking for the file covers the org pipeline, a contributor's own
+// CI and a fresh clone with one rule and no special cases.
+val vendoredApiJar = layout.buildDirectory.file("downloaded-deps/boss-plugin-api.jar")
+val useLocalDependencies = !vendoredApiJar.get().asFile.exists()
 val bossPluginApiVersion = "1.0.87"
 val localApiJar = layout.projectDirectory.file("libs/boss-plugin-api-$bossPluginApiVersion.jar")
 
@@ -56,7 +62,7 @@ dependencies {
     if (useLocalDependencies) {
         compileOnly(files(localApiJar))
     } else {
-        compileOnly(files("build/downloaded-deps/boss-plugin-api.jar"))
+        compileOnly(files(vendoredApiJar))
     }
 
     implementation(compose.desktop.currentOs)

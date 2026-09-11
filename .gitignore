@@ -9,3 +9,4 @@ libs/
 # being part of it, so they stay local.
 docs/PR_*.md
 docs/ISSUE_*.md
+BOSS-Plugin-Contributor-Guide.md

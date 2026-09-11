@@ -101,6 +101,31 @@ class SessionRecorder(private val clock: () -> Long = System::currentTimeMillis)
             }
         }
 
+    /**
+     * Moves the session onto [toName] and keeps a note that it moved.
+     *
+     * Both halves matter. Leaving [SessionSnapshot.profileName] at the value the
+     * session opened under made the exported report name a policy under which none
+     * of the later decisions were taken; overwriting it silently would name a policy
+     * under which none of the earlier ones were. A repeat of the profile already in
+     * force is dropped, so re-pressing the active control does not manufacture an
+     * event.
+     */
+    fun profileChanged(toName: String) =
+        mutate { current ->
+            if (current.profileName == toName) {
+                current
+            } else {
+                current.copy(
+                    profileName = toName,
+                    profileChanges = (
+                        current.profileChanges +
+                            ProfileChange(clock(), current.profileName, toName)
+                    ).takeLast(MAX_PROFILE_CHANGES),
+                )
+            }
+        }
+
     fun setUnclassifiedTools(names: List<String>) =
         mutate { it.copy(unclassifiedTools = names.distinct().sorted()) }
 
@@ -136,5 +161,8 @@ class SessionRecorder(private val clock: () -> Long = System::currentTimeMillis)
         const val MAX_RECORDS = 500
         const val MAX_TOUCHES = 500
         const val MAX_NOTES = 200
+
+        /** Capped like the rest. An operator flipping the control repeatedly is noise, not evidence. */
+        const val MAX_PROFILE_CHANGES = 50
     }
 }

@@ -53,6 +53,11 @@ class WardenRuntimeTest {
      */
     private fun TestScope.drain() = testScheduler.runCurrent()
 
+    /** True when nothing is listening on [port], which is how a released socket looks. */
+    private fun portIsFree(port: Int): Boolean =
+        runCatching { java.net.ServerSocket().use { it.bind(java.net.InetSocketAddress("127.0.0.1", port)); true } }
+            .getOrDefault(false)
+
     @AfterTest
     fun tearDown() {
         runtimes.forEach { it.dispose() }
@@ -348,6 +353,57 @@ class WardenRuntimeTest {
         assertTrue(r.status.value.running, "the gateway did not come back after a port change")
         assertNotNull(r.status.value.port)
         assertFalse(first == null)
+    }
+
+    // ---- being switched off ---------------------------------------------------
+
+    @Test
+    fun `being disabled closes the gateway, because the host never tells the plugin`() = runTest {
+        // Measured against 9.5.11, and the reason this exists: disabling the plugin
+        // from the Toolbox unregisters its panel and tools and stops its sandbox, and
+        // never calls dispose(). Port 7678 stayed open and went on forwarding
+        // run_command with the panel gone, which is the one state a supervision tool
+        // must not be in.
+        store.current = WardenSettings(preferredPort = 0, gatewayEnabled = true)
+        val r = runtime()
+        r.initialise()
+        drain()
+        assertTrue(r.status.value.running, "the gateway never started, so this proves nothing")
+        val port = r.status.value.port
+        assertNotNull(port)
+
+        host.disablePlugin()
+        drain()
+
+        assertFalse(r.status.value.running, "the panel would still claim to be running")
+        assertNull(r.status.value.port, "a dead endpoint was left advertised")
+        assertTrue(portIsFree(port), "the socket outlived the plugin being switched off")
+    }
+
+    @Test
+    fun `being disabled drops live grants too`() = runTest {
+        // A grant is a permission the operator gave this gateway. Switching the
+        // gateway off and leaving the permission behind would be the wrong half.
+        store.current = WardenSettings(preferredPort = 0, gatewayEnabled = true)
+        val r = runtime()
+        r.initialise()
+        drain()
+        r.grants.grant(Capability.EXECUTE, 600_000)
+        host.disablePlugin()
+        drain()
+        assertTrue(r.grants.remaining().isEmpty())
+    }
+
+    @Test
+    fun `a host with no registry still loads, it just cannot notice a disable`() = runTest {
+        // Every provider on PluginContext is nullable. Degrading to the old behaviour
+        // is correct here; refusing to start would be worse than the bug being fixed.
+        host.exposesRegistry = false
+        store.current = WardenSettings(preferredPort = 0, gatewayEnabled = true)
+        val r = runtime()
+        r.initialise()
+        drain()
+        assertTrue(r.status.value.running)
     }
 
     @Test

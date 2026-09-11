@@ -1,6 +1,9 @@
 package ai.rever.boss.plugin.dynamic.warden.gateway
 
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
@@ -27,6 +30,16 @@ data class ApprovalRequest(
     val capability: Capability,
     val argumentsPreview: String,
     val grantDurationMillis: Long,
+    /**
+     * When the operator was asked, so the panel can say how long this has been
+     * waiting rather than only that it is.
+     *
+     * Defaulted at construction rather than passed in, because the coordinator builds
+     * this immediately before raising the dialog: the default is the correct value
+     * and threading a clock through to produce the same number would only add a way
+     * for the two to disagree.
+     */
+    val askedAtMillis: Long = System.currentTimeMillis(),
 )
 
 /**
@@ -60,10 +73,21 @@ class ApprovalCoordinator(
 ) {
     private val mutex = Mutex()
 
-    /** True when a dialog is currently open, so the panel can say why it is waiting. */
-    @Volatile
-    var pending: ApprovalRequest? = null
-        private set
+    private val _pending = MutableStateFlow<ApprovalRequest?>(null)
+
+    /**
+     * The request currently in front of the operator, as a flow the panel collects.
+     *
+     * A flow rather than a plain field because Compose cannot observe a `@Volatile
+     * var`, which is why the panel showed "0 calls" while a shell command sat held
+     * at a dialog. The KDoc here has claimed since the first version that the panel
+     * could say why it was waiting; it could not, until this became something it
+     * could subscribe to.
+     */
+    val pendingRequests: StateFlow<ApprovalRequest?> = _pending.asStateFlow()
+
+    /** The same value read directly, for callers that are not recomposing. */
+    val pending: ApprovalRequest? get() = _pending.value
 
     /**
      * Returns whether the call may proceed.
@@ -90,7 +114,7 @@ class ApprovalCoordinator(
                     argumentsPreview = argumentsPreview,
                     grantDurationMillis = grantDurationMillis,
                 )
-            pending = request
+            _pending.value = request
             try {
                 when (askWithTimeout(request)) {
                     ApprovalChoice.ONCE -> ApprovalOutcome.APPROVED
@@ -101,7 +125,7 @@ class ApprovalCoordinator(
                     ApprovalChoice.DENY -> ApprovalOutcome.REFUSED
                 }
             } finally {
-                pending = null
+                _pending.value = null
             }
         }
     }

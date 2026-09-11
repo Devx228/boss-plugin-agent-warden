@@ -62,6 +62,39 @@ class SessionRecorderTest {
     }
 
     @Test
+    fun `changing the profile mid-session moves the session and leaves a trail`() {
+        // The exported report used to name the profile the session opened under while
+        // every later decision had been taken by a different one. Seen live: a report
+        // headed "Full access" whose table contained a refusal only "Read only" makes.
+        val r = recorder()
+        r.start("s", "Full access", null)
+        now = 2_000L
+        r.profileChanged("Read only")
+        val s = r.state.value
+        assertEquals("Read only", s.profileName, "the session kept the policy it opened under")
+        assertEquals(1, s.profileChanges.size)
+        assertEquals(ProfileChange(2_000L, "Full access", "Read only"), s.profileChanges.single())
+    }
+
+    @Test
+    fun `re-selecting the profile already in force records nothing`() {
+        // The panel's control is clickable when it is already active, and an operator
+        // pressing it twice must not manufacture an event the report then explains.
+        val r = recorder()
+        r.start("s", "Read only", null)
+        r.profileChanged("Read only")
+        assertTrue(r.state.value.profileChanges.isEmpty())
+    }
+
+    @Test
+    fun `a profile change between sessions is ignored`() {
+        val r = recorder()
+        r.profileChanged("Build")
+        assertTrue(r.state.value.profileChanges.isEmpty())
+        assertEquals("-", r.state.value.profileName)
+    }
+
+    @Test
     fun `a blank label falls back to a usable default`() {
         // The label reaches a filename. An empty one produced "agent-session-...-.md".
         val r = recorder()

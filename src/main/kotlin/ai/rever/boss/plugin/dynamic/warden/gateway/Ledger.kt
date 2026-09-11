@@ -48,6 +48,30 @@ data class InvocationRecord(
     val argumentsPreview: String,
     val detail: String? = null,
     val durationMillis: Long? = null,
+    /**
+     * How long the call sat in front of a person, and how long upstream had it.
+     *
+     * Split out of [durationMillis] because the single number cannot answer the
+     * question an operator actually asks when something was slow, which is whether
+     * the delay was theirs. It is also what makes the client-timeout problem legible:
+     * a call showing 118000 in [waitedForOperatorMillis] and nothing in
+     * [upstreamMillis] was not a slow tool, it was an unattended dialog.
+     *
+     * Null rather than zero when the phase did not happen, so "not asked" and "asked
+     * and answered instantly" stay distinguishable.
+     */
+    val waitedForOperatorMillis: Long? = null,
+    val upstreamMillis: Long? = null,
+    /**
+     * What the tool name alone said this was, when that differs from what it was
+     * decided as.
+     *
+     * Null for the ordinary call, where the two agree. Non-null only when
+     * `CommandRisk` judged a shell command read-only, and present because an allowed
+     * `run_command` under a profile that escalates execution reads as a contradiction
+     * otherwise, and a reader who cannot see why is right to distrust the record.
+     */
+    val declaredCapability: Capability? = null,
 )
 
 /**
@@ -107,8 +131,9 @@ object Redactor {
  *
  * Bounded at [CAPACITY]. An agent can emit hundreds of calls a minute, and an
  * unbounded list behind a `StateFlow` that a Compose panel recomposes on is a
- * memory leak with a UI attached. Oldest entries are dropped; the exported report
- * is the durable artefact, not this.
+ * memory leak with a UI attached. Oldest entries are dropped, and that is safe to
+ * do only because it is not the durable copy: every call is appended to
+ * `TraceLog` as it resolves, so a dropped entry is still on disk.
  */
 @Serializable
 data class LedgerState(

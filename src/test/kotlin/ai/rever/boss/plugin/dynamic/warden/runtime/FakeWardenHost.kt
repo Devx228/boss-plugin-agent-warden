@@ -46,6 +46,19 @@ class FakeWardenHost(
         return approvalAnswer
     }
 
+    /**
+     * Emits when a test calls [disablePlugin], standing in for the host unregistering
+     * this plugin's tools. Null when [exposesRegistry] is false, which is the host
+     * that offers no registry at all.
+     */
+    var exposesRegistry: Boolean = true
+    private val unregistered = MutableSharedFlow<Unit>(replay = 1, extraBufferCapacity = 1)
+
+    override fun unregistered(): Flow<Unit>? = if (exposesRegistry) unregistered else null
+
+    /** Simulates the operator switching the plugin off in the Toolbox. */
+    suspend fun disablePlugin() = unregistered.emit(Unit)
+
     override suspend fun upstreamToolNames(): List<String> {
         if (failToolListing) throw IllegalStateException("upstream unreachable")
         return toolNames

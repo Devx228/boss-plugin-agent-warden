@@ -62,6 +62,21 @@ data class AgentNote(
 )
 
 /**
+ * A policy change the operator made while a session was open.
+ *
+ * Kept because the report's Profile row otherwise names one policy for a session
+ * that ran under two, and every decision in the table below it was made under
+ * whichever was in force at the time. A report that misnames the policy is worse
+ * than one that omits it, because the misnamed one gets believed.
+ */
+@Serializable
+data class ProfileChange(
+    val atMillis: Long,
+    val fromName: String,
+    val toName: String,
+)
+
+/**
  * Everything known about one session, in the shape the report renders from.
  *
  * Deliberately a plain serialisable value with no host types in it, so the report
@@ -73,7 +88,10 @@ data class SessionSnapshot(
     val label: String,
     val startedAtMillis: Long,
     val endedAtMillis: Long? = null,
+    /** The policy in force now, which is not necessarily the one the session opened under. */
     val profileName: String,
+    /** Empty for the ordinary case of a session that ran under one policy throughout. */
+    val profileChanges: List<ProfileChange> = emptyList(),
     val projectPath: String? = null,
     val records: List<InvocationRecord> = emptyList(),
     val fileTouches: List<FileTouch> = emptyList(),

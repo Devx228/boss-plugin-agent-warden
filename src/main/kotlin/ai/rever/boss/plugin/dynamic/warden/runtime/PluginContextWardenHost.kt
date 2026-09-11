@@ -9,7 +9,11 @@ import ai.rever.boss.plugin.dynamic.warden.session.GitSnapshot
 import ai.rever.boss.plugin.logging.BossLogger
 import ai.rever.boss.plugin.logging.LogCategory
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.dropWhile
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.take
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -177,6 +181,27 @@ class PluginContextWardenHost(
      * coverage. Empty on any failure; this is diagnostic and must never be able to
      * take a start down with it.
      */
+    /**
+     * Watches the host registry for this plugin's own tools disappearing.
+     *
+     * `dropWhile` is what makes this safe at startup: the flow's first value arrives
+     * before `registerMcpToolProvider` has run, so emitting on that would shut the
+     * gateway down a moment after starting it. Waiting for the provider to appear
+     * once, and only then reacting to it going, distinguishes "not registered yet"
+     * from "no longer registered". `take(1)` because the answer cannot change back:
+     * re-enabling constructs a fresh plugin instance with a fresh runtime.
+     */
+    override fun unregistered(): Flow<Unit>? {
+        val registry = context.mcpToolRegistry ?: return null
+        return registry.allTools
+            .map { tools -> tools.any { it.providerId == PLUGIN_ID } }
+            .distinctUntilChanged()
+            .dropWhile { !it }
+            .filter { !it }
+            .take(1)
+            .map { }
+    }
+
     override suspend fun upstreamToolNames(): List<String> =
         runCatching {
             val endpoint = URI.create(settings().upstreamUrl)
@@ -222,6 +247,9 @@ class PluginContextWardenHost(
     }
 
     private companion object {
+        /** Matches `plugin.json`, which is what the host registers the tool provider under. */
+        const val PLUGIN_ID = "ai.rever.boss.plugin.dynamic.warden"
+
         const val CHOICE_ONCE = "once"
         const val CHOICE_WHILE = "while"
         const val CHOICE_DENY = "deny"

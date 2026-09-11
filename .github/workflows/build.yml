@@ -1,14 +1,53 @@
-name: Release
+name: Build
+
+# Proves the repository is green on a machine that is not the author's, which is
+# the only thing a reviewer can check without installing anything. It builds and
+# tests and nothing else: store publication needs credentials this repository does
+# not have and should not ask for.
 
 on:
-  workflow_dispatch:
   push:
     branches: [main]
+  pull_request:
+  workflow_dispatch:
 
 jobs:
-  release:
-    uses: risa-labs-inc/BossConsole-Releases/.github/workflows/plugin-release.yml@main
-    with:
-      boss_plugin_api_version: '1.0.87'
-    secrets:
-      BOSS_STORE_PLUGIN_PUBLISH_KEY: ${{ secrets.BOSS_STORE_PLUGIN_PUBLISH_KEY }}
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: Test
+        run: ./gradlew test --no-daemon
+
+      - name: Build the plugin jar
+        run: ./gradlew buildPluginJar --no-daemon
+
+      # So a reviewer can try the plugin without building it themselves.
+      - name: Upload the jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: boss-plugin-agent-warden
+          path: build/libs/*.jar
+          if-no-files-found: error
+
+      - name: Upload the test report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: build/reports/tests/test

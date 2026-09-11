@@ -29,7 +29,7 @@ object SessionReport {
         return buildString {
             appendLine("# Agent session: ${snapshot.label}")
             appendLine()
-            appendOverview(snapshot, time)
+            appendOverview(snapshot, time, clock)
             appendLine()
             appendOutcomes(snapshot)
             appendLine()
@@ -51,7 +51,11 @@ object SessionReport {
         }
     }
 
-    private fun StringBuilder.appendOverview(s: SessionSnapshot, time: DateTimeFormatter) {
+    private fun StringBuilder.appendOverview(
+        s: SessionSnapshot,
+        time: DateTimeFormatter,
+        clock: DateTimeFormatter,
+    ) {
         appendLine("| | |")
         appendLine("|---|---|")
         appendLine("| Project | ${s.projectPath ?: "_no project open_"} |")
@@ -62,6 +66,31 @@ object SessionReport {
         )
         appendLine("| Duration | ${humanDuration(s.durationMillis)} |")
         appendLine("| Tool calls | ${s.records.size} |")
+        appendProfileChanges(s, clock)
+    }
+
+    /**
+     * Says so when the Profile row above is not the whole truth.
+     *
+     * Absent for the ordinary session that ran under one policy, so it costs a
+     * reader nothing. Present when it changed, because the row names only the last
+     * one, and a reader comparing a refusal against a profile that permits it would
+     * otherwise conclude the report is wrong rather than that the policy moved.
+     */
+    private fun StringBuilder.appendProfileChanges(s: SessionSnapshot, clock: DateTimeFormatter) {
+        if (s.profileChanges.isEmpty()) return
+        appendLine()
+        appendLine(
+            "The profile above is the one in force at the end. It changed during the session, so " +
+                "each call below was decided by whichever was in force at its own timestamp.",
+        )
+        appendLine()
+        for (change in s.profileChanges) {
+            appendLine(
+                "- **${clock.format(Instant.ofEpochMilli(change.atMillis))}** " +
+                    "${change.fromName} to ${change.toName}",
+            )
+        }
     }
 
     private fun StringBuilder.appendOutcomes(s: SessionSnapshot) {
