@@ -62,6 +62,32 @@ interface WardenHost {
     suspend fun askApproval(request: ApprovalRequest): ApprovalChoice
 
     /**
+     * Emits once when the host has unregistered this plugin's MCP tools.
+     *
+     * This exists because there is no disable hook. `dispose()` runs on unload only:
+     * disabling a plugin unregisters its panels, tools and UI extensions and stops
+     * its sandbox, and never calls into the plugin at all. For most plugins that is
+     * harmless, because unregistering the panel is the whole of what they were doing.
+     * This one holds a listening socket, and a socket nobody told to close stays
+     * open.
+     *
+     * Measured, not assumed: after disabling Agent Warden from the Toolbox, port
+     * 7678 was still listening and still forwarded `run_command` to BOSS, with the
+     * panel gone and no way for the operator to see it. An operator who switches off
+     * the supervision layer has every reason to believe it is off.
+     *
+     * The registry is the signal because the host genuinely does unregister the tool
+     * provider on disable, and `allTools` is a `StateFlow` this plugin can watch.
+     * That is a workaround for a missing hook rather than a design, and it should be
+     * replaced if the host ever grows one.
+     *
+     * Null when the host exposes no registry, in which case the gateway keeps the
+     * behaviour it had before, which is the one being fixed. Nothing here can make
+     * that worse.
+     */
+    fun unregistered(): Flow<Unit>?
+
+    /**
      * Tool names currently advertised upstream, used to report catalog coverage.
      *
      * Empty on failure rather than throwing. Coverage reporting is diagnostic, and

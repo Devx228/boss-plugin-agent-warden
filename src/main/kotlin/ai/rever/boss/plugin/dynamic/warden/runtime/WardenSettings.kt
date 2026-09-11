@@ -22,6 +22,16 @@ data class WardenSettings(
     val hideDeniedTools: Boolean = true,
     val approvalTimeoutMillis: Long = ApprovalCoordinator.DEFAULT_TIMEOUT_MILLIS,
     val grantDurationMillis: Long = GrantBook.DEFAULT_DURATION_MILLIS,
+    /**
+     * Whether a shell command may be decided on what it actually runs.
+     *
+     * On by default, because the alternative measured badly in practice: every
+     * `git status` an agent emits raising a dialog is what teaches an operator to
+     * approve without reading. Off restores the older behaviour of escalating every
+     * shell call regardless of contents, which is stricter and noisier. See
+     * [ai.rever.boss.plugin.dynamic.warden.gateway.CommandRisk].
+     */
+    val judgeShellCommands: Boolean = true,
     /** Where BOSS's own MCP endpoint lives. Configurable because the port is a setting there too. */
     val upstreamUrl: String = DEFAULT_UPSTREAM,
 ) {

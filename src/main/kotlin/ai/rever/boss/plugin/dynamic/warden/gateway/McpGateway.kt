@@ -14,6 +14,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
+import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.URI
 import java.net.http.HttpClient
@@ -63,8 +64,23 @@ class McpGateway(
     private val approve: suspend (toolName: String, capability: Capability, preview: String) -> ApprovalOutcome,
     private val onRecord: (InvocationRecord) -> Unit,
     private val nextRecordId: () -> Long,
+    /**
+     * Called when a verdict was reached but could not be written back, because the
+     * caller had already disconnected. Separate from [onRecord]: the call itself is
+     * recorded either way, and conflating the two would either lose the record or
+     * duplicate it.
+     */
+    private val onAnswerUndelivered: (toolName: String, reason: String) -> Unit = { _, _ -> },
     /** Capabilities filtered out of `tools/list`, so the agent is never told they exist. */
     private val hiddenCapabilities: () -> Set<Capability> = { emptySet() },
+    /**
+     * Whether a shell command may be decided on what it actually runs.
+     *
+     * A lambda rather than a constructor flag because the operator can turn it off
+     * while the gateway is up, and a gateway holding a stale copy of that answer
+     * would keep judging commands after they asked it to stop.
+     */
+    private val judgeShellCommands: () -> Boolean = { true },
 ) {
     private var server: HttpServer? = null
 
@@ -153,16 +169,30 @@ class McpGateway(
         toolName: String,
         arguments: JsonElement?,
     ) {
-        val capability = ToolCatalog.capabilityOf(toolName)
+        val declared = ToolCatalog.capabilityOf(toolName)
+        // The only decision in this plugin taken on an argument rather than a name,
+        // and it can only ever lower EXECUTE to a read. See CommandRisk.
+        val capability = judgeCommand(declared, toolName, arguments as? JsonObject)
+        val downgraded = capability != declared
         val preview = Redactor.preview(arguments)
         val id = nextRecordId()
         val startedAt = System.currentTimeMillis()
 
+        // Null until the phase happens, so "not asked" stays distinguishable from
+        // "asked and answered instantly". See InvocationRecord.
+        var waitedMillis: Long? = null
+
         val allowedOutcome: Outcome =
             when (val decision = decide(toolName, capability)) {
                 is Decision.Deny -> {
-                    refuse(exchange, message, decision.reason)
+                    // Recorded before the answer is written, and the order is the point.
+                    // Writing to a client that has already hung up throws, and an
+                    // exception here would skip whatever came after it. Putting the
+                    // record second lost exactly the entries most worth keeping: an
+                    // agent that gave up waiting is the case where the operator most
+                    // needs to see what was asked for. Observed live against 9.5.11.
                     record(id, startedAt, toolName, capability, Outcome.BLOCKED, preview, decision.reason)
+                    answer(toolName) { refuse(exchange, message, decision.reason) }
                     return
                 }
 
@@ -170,10 +200,18 @@ class McpGateway(
                     // runBlocking is correct here rather than a shortcut. This is a pool
                     // thread the gateway owns, the call genuinely cannot proceed until a
                     // person answers, and MCP has no "pending" reply to send in the interim.
+                    val askedAt = System.currentTimeMillis()
                     val approval = runBlocking { approve(toolName, capability, preview) }
+                    waitedMillis = System.currentTimeMillis() - askedAt
                     if (!approval.allowed) {
-                        refuse(exchange, message, REFUSED_BY_OPERATOR)
-                        record(id, startedAt, toolName, capability, Outcome.REFUSED, preview, REFUSED_BY_OPERATOR)
+                        // Before the write, for the reason given on the Deny branch above.
+                        // This one matters more: an approval takes as long as a person
+                        // takes, and clients give up well before this gateway does.
+                        record(
+                            id, startedAt, toolName, capability, Outcome.REFUSED, preview,
+                            REFUSED_BY_OPERATOR, waitedForOperatorMillis = waitedMillis,
+                        )
+                        answer(toolName) { refuse(exchange, message, REFUSED_BY_OPERATOR) }
                         return
                     }
                     approval.toLedgerOutcome()
@@ -182,11 +220,26 @@ class McpGateway(
                 is Decision.Allow -> Outcome.ALLOWED
             }
 
+        val forwardedAt = System.currentTimeMillis()
         val response = forward(body, exchange)
+        val upstreamMillis = System.currentTimeMillis() - forwardedAt
         val outcome = if (looksLikeToolError(response.body())) Outcome.FAILED else allowedOutcome
-        record(id, startedAt, toolName, capability, outcome, preview, null)
-        respond(exchange, response.statusCode(), passthroughHeaders(response), response.body())
+        record(
+            id, startedAt, toolName, capability, outcome, preview,
+            detail = if (downgraded) CommandRisk.downgradeReason(scriptOf(arguments)) else null,
+            waitedForOperatorMillis = waitedMillis, upstreamMillis = upstreamMillis,
+            declaredCapability = declared.takeIf { downgraded },
+        )
+        answer(toolName) {
+            respond(exchange, response.statusCode(), passthroughHeaders(response), response.body())
+        }
     }
+
+    private fun judgeCommand(declared: Capability, toolName: String, arguments: JsonObject?): Capability =
+        if (judgeShellCommands()) CommandRisk.effectiveCapability(declared, toolName, arguments) else declared
+
+    private fun scriptOf(arguments: JsonElement?): String? =
+        ((arguments as? JsonObject)?.get("script") as? JsonPrimitive)?.content
 
     /**
      * Answers the agent with a tool-level error rather than a transport one.
@@ -284,6 +337,7 @@ class McpGateway(
         if (body.isNotEmpty()) exchange.responseBody.use { it.write(body) }
     }
 
+    @Suppress("LongParameterList") // One record; splitting it would only move the list.
     private fun record(
         id: Long,
         startedAt: Long,
@@ -292,6 +346,9 @@ class McpGateway(
         outcome: Outcome,
         preview: String,
         detail: String?,
+        waitedForOperatorMillis: Long? = null,
+        upstreamMillis: Long? = null,
+        declaredCapability: Capability? = null,
     ) {
         onRecord(
             InvocationRecord(
@@ -303,8 +360,29 @@ class McpGateway(
                 argumentsPreview = preview,
                 detail = detail,
                 durationMillis = System.currentTimeMillis() - startedAt,
+                waitedForOperatorMillis = waitedForOperatorMillis,
+                upstreamMillis = upstreamMillis,
+                declaredCapability = declaredCapability,
             ),
         )
+    }
+
+    /**
+     * Writes the answer, and reports rather than throws when nobody is listening.
+     *
+     * The caller may be gone: an approval takes as long as a person takes and MCP
+     * clients give up long before this gateway does. Previously that threw, was
+     * caught by [handle], logged as a gateway failure and followed by a doomed 502
+     * write. None of that reaches anyone. Naming it instead gives the trace a line
+     * saying the verdict was correct and undelivered, which is the only reading that
+     * reconciles this record with the agent's own account of a timeout.
+     */
+    private fun answer(toolName: String, write: () -> Unit) {
+        try {
+            write()
+        } catch (e: IOException) {
+            onAnswerUndelivered(toolName, e.message ?: e.javaClass.simpleName)
+        }
     }
 
     private fun parseObject(body: ByteArray): JsonObject? =

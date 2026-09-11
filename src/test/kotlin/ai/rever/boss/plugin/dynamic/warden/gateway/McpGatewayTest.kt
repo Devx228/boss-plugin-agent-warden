@@ -5,12 +5,16 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.concurrent.thread
 import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -36,6 +40,13 @@ class McpGatewayTest {
     private var approvalAnswer: ApprovalOutcome = ApprovalOutcome.APPROVED
     private val approvalsAsked = CopyOnWriteArrayList<String>()
 
+    /** Lets a test hold the handler thread inside the record call. See the ordering tests. */
+    private var onRecordHook: ((InvocationRecord) -> Unit)? = null
+
+    private val undelivered = CopyOnWriteArrayList<Pair<String, String>>()
+
+    private var judgeCommands = true
+
     @BeforeTest
     fun setUp() {
         upstream = FakeUpstream().start()
@@ -47,7 +58,12 @@ class McpGatewayTest {
                     approvalsAsked.add(tool)
                     approvalAnswer
                 },
-                onRecord = { ledger.add(it) },
+                onRecord = {
+                    ledger.add(it)
+                    onRecordHook?.invoke(it)
+                },
+                onAnswerUndelivered = { tool, reason -> undelivered.add(tool to reason) },
+                judgeShellCommands = { judgeCommands },
                 nextRecordId = { ids.getAndIncrement() },
                 hiddenCapabilities = { profile.hardDenied },
             )
@@ -114,8 +130,10 @@ class McpGatewayTest {
 
     @Test
     fun `a call the operator approves does reach upstream`() {
+        // Not "ls", which CommandRisk now judges a read and lets through unasked.
+        // A test that escalates has to use something that genuinely needs escalating.
         approvalAnswer = ApprovalOutcome.APPROVED
-        val response = callTool("run_command", """{"script":"ls"}""")
+        val response = callTool("run_command", """{"script":"npm install"}""")
         assertTrue(FakeUpstream.UPSTREAM_MARKER in response.body())
         assertEquals(listOf("run_command"), approvalsAsked)
         assertEquals(Outcome.APPROVED, lastRecord.outcome)
@@ -124,7 +142,7 @@ class McpGatewayTest {
     @Test
     fun `a granted call is recorded distinctly from one a person approved`() {
         approvalAnswer = ApprovalOutcome.GRANTED
-        callTool("run_command", """{"script":"ls"}""")
+        callTool("run_command", """{"script":"npm install"}""")
         assertEquals(Outcome.GRANTED, lastRecord.outcome)
     }
 
@@ -324,6 +342,155 @@ class McpGatewayTest {
         threads.forEach { it.join(20_000) }
         assertEquals(24, ledger.size, "records lost or duplicated under concurrency")
         assertEquals(24, ledger.map { it.id }.toSet().size, "duplicate record ids issued")
+    }
+
+    // ---- the record outlives the caller --------------------------------------
+
+    /**
+     * Asserts an ordering rather than a value, and the reason is a live failure.
+     *
+     * A stopped call used to be written to the client first and recorded second. An
+     * approval takes as long as a person takes, and MCP clients give up well before
+     * this gateway does, so by the time the operator answered, the socket was often
+     * gone. Writing to it threw, the throw unwound past the record call, and the one
+     * entry the operator most needed - a shell command they had just refused - was
+     * absent from the panel and from the exported report. Seen against BossConsole
+     * 9.5.11 with a real agent whose client timed out at 120s.
+     *
+     * Holding the handler inside the record call proves the order without depending
+     * on a broken socket, which is what makes this deterministic. The short negative
+     * wait is the only sleep in the suite and it is what the assertion is made of:
+     * an answer that has not arrived while the record is still being taken is the
+     * property under test.
+     */
+    private fun assertRecordedBeforeAnswering(tool: String) {
+        val recordTaken = CountDownLatch(1)
+        val releaseRecord = CountDownLatch(1)
+        val clientDone = CountDownLatch(1)
+        onRecordHook = {
+            recordTaken.countDown()
+            releaseRecord.await(10, TimeUnit.SECONDS)
+        }
+
+        thread {
+            runCatching { callTool(tool) }
+            clientDone.countDown()
+        }
+
+        assertTrue(recordTaken.await(10, TimeUnit.SECONDS), "the stopped call was never recorded at all")
+        assertFalse(
+            clientDone.await(500, TimeUnit.MILLISECONDS),
+            "the answer was written before the record was taken, so a client that hung up loses the entry",
+        )
+        releaseRecord.countDown()
+        assertTrue(clientDone.await(10, TimeUnit.SECONDS), "the gateway never answered")
+        assertEquals(tool, lastRecord.toolName)
+        assertFalse(reachedUpstream(), "a stopped call must not reach upstream")
+    }
+
+    @Test
+    fun `an operator refusal is recorded before the agent is answered`() {
+        profile = Profile.READ_ONLY
+        approvalAnswer = ApprovalOutcome.REFUSED
+        assertRecordedBeforeAnswering("run_command")
+        assertEquals(Outcome.REFUSED, lastRecord.outcome)
+    }
+
+    @Test
+    fun `a hard-denied call is recorded before the agent is answered`() {
+        profile = Profile.READ_ONLY
+        assertRecordedBeforeAnswering("manage_tools")
+        assertEquals(Outcome.BLOCKED, lastRecord.outcome)
+    }
+
+    // ---- judging the command, not the tool -----------------------------------
+
+    @Test
+    fun `a read-only shell command runs without asking anyone`() {
+        // The feature, end to end over a socket. Under Read only this used to raise a
+        // dialog for every status check an agent made, which is what teaches an
+        // operator to approve without reading.
+        profile = Profile.READ_ONLY
+        val response = callTool("run_command", """{"script":"git status"}""")
+        assertTrue(FakeUpstream.UPSTREAM_MARKER in response.body(), "a harmless command was not forwarded")
+        assertTrue(approvalsAsked.isEmpty(), "the operator was asked about a read-only command")
+        assertEquals(Outcome.ALLOWED, lastRecord.outcome)
+    }
+
+    @Test
+    fun `a dangerous shell command still asks, under the same profile`() {
+        // The other half. Without this the test above only proves the gate is off.
+        profile = Profile.READ_ONLY
+        approvalAnswer = ApprovalOutcome.REFUSED
+        callTool("run_command", """{"script":"rm -rf /"}""")
+        assertEquals(listOf("run_command"), approvalsAsked)
+        assertEquals(Outcome.REFUSED, lastRecord.outcome)
+    }
+
+    @Test
+    fun `a call that was judged says so in the record`() {
+        // An allowed run_command under a profile that escalates execution is a
+        // contradiction on the face of it. The record has to carry why.
+        profile = Profile.READ_ONLY
+        callTool("run_command", """{"script":"git status"}""")
+        assertEquals(Capability.EXECUTE, lastRecord.declaredCapability, "the row does not say what it was called as")
+        assertEquals(Capability.READ_CONTENT, lastRecord.capability)
+        assertTrue("git status" in (lastRecord.detail ?: ""), "the reason does not name the command")
+    }
+
+    @Test
+    fun `judging can be turned off, and then everything asks again`() {
+        // It is a relaxation, so it has to be defeatable. With it off the older, noisier
+        // behaviour returns exactly.
+        judgeCommands = false
+        profile = Profile.READ_ONLY
+        approvalAnswer = ApprovalOutcome.REFUSED
+        callTool("run_command", """{"script":"git status"}""")
+        assertEquals(listOf("run_command"), approvalsAsked)
+        assertEquals(Outcome.REFUSED, lastRecord.outcome)
+    }
+
+    // ---- phases --------------------------------------------------------------
+
+    @Test
+    fun `an escalated call records how long the operator took, separately from upstream`() {
+        // A single duration cannot answer the question the operator actually asks
+        // when something was slow, which is whether the wait was theirs.
+        profile = Profile.READ_ONLY
+        approvalAnswer = ApprovalOutcome.APPROVED
+        callTool("run_command")
+        val r = lastRecord
+        assertNotNull(r.waitedForOperatorMillis, "the approval wait was not measured")
+        assertNotNull(r.upstreamMillis, "the upstream leg was not measured")
+    }
+
+    @Test
+    fun `a call nobody was asked about has no operator wait at all`() {
+        // Null, not zero. "Not asked" and "asked and answered instantly" are different
+        // facts and anything aggregating the trace has to be able to tell them apart.
+        profile = Profile.READ_ONLY
+        callTool("list_tabs")
+        assertNull(lastRecord.waitedForOperatorMillis)
+        assertNotNull(lastRecord.upstreamMillis)
+    }
+
+    @Test
+    fun `a refused call measures the wait but never the upstream it did not reach`() {
+        profile = Profile.READ_ONLY
+        approvalAnswer = ApprovalOutcome.REFUSED
+        callTool("run_command")
+        assertNotNull(lastRecord.waitedForOperatorMillis)
+        assertNull(lastRecord.upstreamMillis, "a refused call reported time upstream it never spent")
+    }
+
+    @Test
+    fun `a verdict delivered normally reports nothing undelivered`() {
+        // The negative half of the pair below. Without it, a hook that fired on every
+        // call would look identical to one that fired on the right ones.
+        profile = Profile.READ_ONLY
+        approvalAnswer = ApprovalOutcome.REFUSED
+        callTool("run_command")
+        assertTrue(undelivered.isEmpty(), "a delivered answer was reported as undelivered")
     }
 
     @Test

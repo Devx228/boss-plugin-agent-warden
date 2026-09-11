@@ -44,12 +44,14 @@ class SessionReportTest {
         git: GitSnapshot? = null,
         unclassified: List<String> = emptyList(),
         ended: Long? = t0 + 65_000,
+        profileChanges: List<ProfileChange> = emptyList(),
     ) = SessionSnapshot(
         id = "s1",
         label = "Refactor the parser",
         startedAtMillis = t0,
         endedAtMillis = ended,
         profileName = "Read only",
+        profileChanges = profileChanges,
         projectPath = "/home/dev/project",
         records = records,
         fileTouches = touches,
@@ -277,5 +279,29 @@ class SessionReportTest {
         // plugin on a session that did not demonstrate it would devalue the ones that do.
         assertTrue("Nothing." in out, out)
         assertTrue("a second opinion rather than the only one" in out, out)
+    }
+
+    @Test
+    fun `a session whose policy changed says so instead of naming one of them`() {
+        // Found live: a report headed "Full access" listing a refusal that only
+        // "Read only" produces. A reader who spots that contradiction discards the
+        // document, and they are right to.
+        val out =
+            render(
+                snapshot(
+                    records = listOf(record(1, "run_command", Capability.EXECUTE, Outcome.REFUSED)),
+                    profileChanges = listOf(ProfileChange(t0 + 30_000, "Full access", "Read only")),
+                ),
+            )
+        assertTrue("the one in force at the end" in out, out)
+        assertTrue("Full access to Read only" in out, out)
+    }
+
+    @Test
+    fun `a session under one policy throughout says nothing about changes`() {
+        // The qualifier costs a reader attention, so it must not appear on the
+        // ordinary session it does not apply to.
+        val out = render(snapshot(records = listOf(record(1, "list_tabs", Capability.INSPECT, Outcome.ALLOWED))))
+        assertFalse("in force at the end" in out, out)
     }
 }
