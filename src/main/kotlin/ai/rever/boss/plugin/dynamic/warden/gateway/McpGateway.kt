@@ -40,7 +40,9 @@ private val gatewayJson = Json { ignoreUnknownKeys = true }
  * than registered with the host. Sitting on the JSON-RPC wire covers
  * plugin-contributed and built-in tools identically, and needs cooperation from
  * neither. Verified against a live endpoint: `tools/list` through this gateway
- * returns all 30 tools a direct connection returns.
+ * returns exactly what a direct connection returns, tool for tool. No count is
+ * quoted because it moves with the installed plugin set, and this gateway never
+ * needs to know what is on the list.
  *
  * **No dependencies.** `com.sun.net.httpserver` and `java.net.http` are JDK
  * built-ins. The plugin jar bundles only its own classes, so any other library

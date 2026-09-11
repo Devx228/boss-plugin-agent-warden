@@ -16,7 +16,7 @@ refused, or put in front of you before it runs.
   Agent Warden  :7678   <- classify, decide, record
     |
     v
-  BOSS MCP      :7677   <- 30 tools, including shell and browser JS
+  BOSS MCP      :7677   <- every tool, including shell and browser JS
 ```
 
 ## The problem
@@ -89,7 +89,9 @@ the surface: the tools worth governing are BossTerm's built-ins, and those are
 served by that plugin's own MCP server rather than registered with the host.
 Sitting on the wire covers plugin-contributed and built-in tools identically and
 needs cooperation from neither. Verified: `tools/list` through the gateway returns
-all 30 tools a direct connection returns.
+exactly what a direct connection returns, tool for tool. On the install tested that
+was 29, and the count moves with whichever plugins are loaded, which is the point:
+the gateway never needs to know what they are.
 
 That was a guess when this plugin was designed. It is now checked, and it turned
 out to matter more than expected. BossConsole 9.5.11 added a policy engine, an
@@ -214,6 +216,11 @@ changing policy: a supervised party that can read its own supervision record is
 being asked politely, not supervised.
 
 ## Install
+
+Source: [Devx228/boss-plugin-agent-warden](https://github.com/Devx228/boss-plugin-agent-warden).
+The quickest route is the jar attached to the latest
+[release](https://github.com/Devx228/boss-plugin-agent-warden/releases/latest),
+which is also what Toolbox's **From GitHub** installs. To build it yourself:
 
 ```bash
 ./gradlew clean buildPluginJar
