@@ -81,9 +81,21 @@ object CommandRisk {
      *
      * `tag` and `stash` are absent because their bare forms list and their common
      * forms create. `config` is absent because `git config --global` writes.
+     * `branch` is here only in its listing forms: see [BRANCH_LISTING_FLAGS].
      */
     private val READ_ONLY_GIT =
         setOf("status", "log", "diff", "show", "branch", "describe", "rev-parse", "blame", "shortlog")
+
+    /**
+     * The only arguments that keep `git branch` a read.
+     *
+     * `git branch` lists, but `git branch <name>` creates, and `-D`, `-d`, `-m`, `-c`,
+     * `-f`, `-u` and their long forms delete, rename, copy, move or re-point. So a
+     * branch command is a read only when every argument is one of these listing flags,
+     * and any name or any other flag escalates.
+     */
+    private val BRANCH_LISTING_FLAGS =
+        setOf("-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "--list", "--show-current")
 
     /**
      * Search tools, and the flags that turn them back into a way to run something.
@@ -132,7 +144,13 @@ object CommandRisk {
         val rest = tokens.drop(1)
         return when (program) {
             in READ_ONLY_PROGRAMS -> true
-            "git" -> rest.firstOrNull { !it.startsWith("-") }?.lowercase() in READ_ONLY_GIT
+            "git" -> {
+                val subcommand = rest.firstOrNull { !it.startsWith("-") }?.lowercase()
+                when (subcommand) {
+                    "branch" -> rest.drop(rest.indexOfFirst { !it.startsWith("-") } + 1).all { it in BRANCH_LISTING_FLAGS }
+                    else -> subcommand in READ_ONLY_GIT
+                }
+            }
             in SEARCH_PROGRAMS -> rest.none { SEARCH_ESCAPE_HATCH.containsMatchIn(it) }
             else -> false
         }

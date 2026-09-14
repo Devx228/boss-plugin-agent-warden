@@ -129,6 +129,29 @@ class CommandRiskTest {
     }
 
     @Test
+    fun `git branch is a read only when it lists`() {
+        // git branch lists, but the same subcommand creates, deletes, renames, copies
+        // and re-points branches. Reported in review: git branch -D <name> was judged a read.
+        listOf("git branch", "git branch -a", "git branch -vv", "git branch --show-current", "git branch --list")
+            .forEach { assertEquals(Capability.READ_CONTENT, effective(it), "a listing git branch should be a read: $it") }
+        listOf(
+            "git branch -D feature",
+            "git branch -d feature",
+            "git branch --delete feature",
+            "git branch new-feature",
+            "git branch -m old new",
+            "git branch -M new",
+            "git branch -c old copy",
+            "git branch -f main HEAD~1",
+            "git branch -u origin/main",
+            "git branch --set-upstream-to=origin/main",
+            "git branch -a -D feature",
+        ).forEach {
+            assertEquals(Capability.EXECUTE, effective(it), "a writing git branch was judged a read: $it")
+        }
+    }
+
+    @Test
     fun `ripgrep cannot smuggle a program in through its preprocessor flag`() {
         // rg --pre hands every file to a program of the caller's choosing.
         assertEquals(Capability.EXECUTE, effective("rg --pre /tmp/evil.sh pattern"))
