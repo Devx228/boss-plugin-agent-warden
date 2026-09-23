@@ -198,7 +198,7 @@ Each of these has cost someone time already. Change them only with the reason in
 
 ## 5. State as of handoff
 
-- **228 tests, zero failures, zero errors, zero skipped.** `./gradlew test`
+- **249 tests, zero failures, zero errors, zero skipped.** `./gradlew test`
 - **Jar builds**, about 360 KB. `./gradlew clean buildPluginJar`
 - **CI is green on a clean Linux runner**, tests and jar, with the jar uploaded as an artifact.
 - **Released as v0.2.0** with the jar attached.

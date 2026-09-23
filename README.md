@@ -63,7 +63,7 @@ profile.
 | Change its own permissions | `manage_tools` | **refused** | **refused** | **refused** |
 | Unrecognised | anything unlisted | asks | asks | asks |
 
-**Asks you about the rest**, once, with the tool name and its redacted arguments,
+**Asks you about the rest**, once, with the tool name and its arguments in full,
 and offers a bounded grant so approving one `run_command` does not mean approving
 the next forty individually.
 
@@ -164,8 +164,10 @@ restores the older, noisier behaviour.
 
 ## The trace
 
-Every call an agent makes is appended to `<project or home>/.agent-warden/agent-trace.jsonl`
-as it resolves, one JSON object per line.
+Every call an agent makes is appended to `~/.agent-warden/agent-trace.jsonl` as it
+resolves, one JSON object per line. It lives under your home directory and never in
+the project, because inside the project the agent could read it with a `cat`,
+delete it with one shell command, or commit it with `git add -A`.
 
 This exists because until it did, everything the plugin observed lived in memory
 until somebody pressed Export. A crash, a plugin reload or a closed window took the
@@ -227,7 +229,7 @@ which is also what Toolbox's **From GitHub** installs. To build it yourself:
 ```
 
 Then in BOSS, open **Toolbox**, choose **From File**, and select
-`build/libs/boss-plugin-agent-warden-0.2.0.jar`. Enable it and follow any reload
+`build/libs/boss-plugin-agent-warden-0.3.0.jar`. Enable it and follow any reload
 prompt. The panel appears under the tool picker as **Agent Warden**, and the
 gateway starts on port 7678.
 
@@ -268,9 +270,9 @@ and refuses rather than allowing.
 
 **What leaves the machine: nothing.** The gateway binds `127.0.0.1` only and
 forwards to BOSS's own loopback endpoint. There is no telemetry, no external
-service, no network call to anywhere but the upstream you configure. The trace and
-the report are written to your own disk, under `.agent-warden/` in the open project
-or your home directory, and nothing sends them anywhere.
+service, no network call to anywhere but the upstream you configure. The trace is
+written under `~/.agent-warden/` and the report under `.agent-warden/` in the open
+project (or your home directory with none open), and nothing sends them anywhere.
 
 **What is stored.** Redacted arguments, tool names, outcomes and timings, in
 `agent-trace.jsonl` and in exported reports. Redaction happens at capture, so raw
@@ -289,7 +291,7 @@ All three are read-only with respect to the workspace.
 ## Development
 
 ```bash
-./gradlew test                                        # 228 tests
+./gradlew test                                        # 249 tests
 ./gradlew buildPluginJar
 ./gradlew runGatewayHarness --args="read-only true"   # drive the gateway with curl, no BOSS needed
 ```

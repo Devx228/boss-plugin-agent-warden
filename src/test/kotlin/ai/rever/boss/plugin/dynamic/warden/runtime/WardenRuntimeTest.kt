@@ -1,12 +1,19 @@
 package ai.rever.boss.plugin.dynamic.warden.runtime
 
+import ai.rever.boss.plugin.dynamic.warden.gateway.ApprovalChoice
 import ai.rever.boss.plugin.dynamic.warden.gateway.Capability
 import ai.rever.boss.plugin.dynamic.warden.gateway.Decision
+import ai.rever.boss.plugin.dynamic.warden.gateway.FakeUpstream
+import ai.rever.boss.plugin.dynamic.warden.gateway.Outcome
 import ai.rever.boss.plugin.dynamic.warden.gateway.Profile
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -181,6 +188,87 @@ class WardenRuntimeTest {
         assertTrue(r.grants.isGranted(Capability.EXECUTE))
         assertFalse(r.grants.isGranted(Capability.BROWSER_SCRIPT), "a grant leaked to another capability")
         assertTrue(r.status.value.profile.decide(Capability.BROWSER_SCRIPT) is Decision.Ask)
+    }
+
+    /** A runtime whose gateway forwards to [upstream], so calls can be driven over the wire. */
+    private fun TestScope.wiredRuntime(upstream: FakeUpstream): WardenRuntime {
+        store.current = WardenSettings(preferredPort = 0, gatewayEnabled = true, upstreamUrl = upstream.uri.toString())
+        return runtime().also {
+            it.initialise()
+            drain()
+        }
+    }
+
+    private fun WardenRuntime.call(id: Int, tool: String, script: String) {
+        val body =
+            """{"jsonrpc":"2.0","id":$id,"method":"tools/call",""" +
+                """"params":{"name":"$tool","arguments":{"script":"$script"}}}"""
+        HttpClient.newHttpClient().send(
+            HttpRequest.newBuilder(URI.create(status.value.endpoint!!))
+                .header("content-type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .build(),
+            HttpResponse.BodyHandlers.ofString(),
+        )
+    }
+
+    @Test
+    fun `a call covered by a grant is recorded as granted, not as allowed by profile`() = runTest {
+        // decide() used to answer Allow for a live grant, so GRANTED never reached
+        // the ledger and a standing permission read as the profile's own.
+        val upstream = FakeUpstream().start()
+        try {
+            host.approvalAnswer = ApprovalChoice.FOR_A_WHILE
+            val r = wiredRuntime(upstream)
+            r.call(1, "run_command", "make build")
+            r.call(2, "run_command", "make test")
+            assertEquals(listOf(Outcome.APPROVED, Outcome.GRANTED), r.recorder.state.value.records.map { it.outcome })
+            assertEquals(1, host.approvalsAsked.size)
+        } finally {
+            upstream.stop()
+        }
+    }
+
+    @Test
+    fun `a call after the session ended opens a new one rather than vanishing`() = runTest {
+        val upstream = FakeUpstream().start()
+        try {
+            val r = wiredRuntime(upstream)
+            r.endSessionAndExport()
+            drain()
+            assertFalse(r.recorder.isRecording)
+            r.call(1, "list_tabs", "")
+            assertTrue(r.recorder.isRecording, "no session was opened for the call")
+            assertEquals(listOf("list_tabs"), r.recorder.state.value.records.map { it.toolName })
+        } finally {
+            upstream.stop()
+        }
+    }
+
+    @Test
+    fun `the trace is written under home, never inside the project the agent works in`() = runTest {
+        val upstream = FakeUpstream().start()
+        try {
+            val r = wiredRuntime(upstream)
+            r.call(1, "list_tabs", "")
+            val path = assertNotNull(r.tracePath)
+            assertTrue(path.startsWith(host.homeDirectory!!), path)
+            assertFalse(path.replace('\\', '/').startsWith(host.projectPath!!), path)
+        } finally {
+            upstream.stop()
+        }
+    }
+
+    @Test
+    fun `changing settings keeps one approval queue`() = runTest {
+        // A second coordinator meant a second mutex, and two dialogs at once.
+        val r = runtime()
+        r.initialise()
+        drain()
+        val before = r.pendingApproval
+        r.updateSettings { it.copy(approvalTimeoutMillis = 30_000) }
+        drain()
+        assertTrue(before === r.pendingApproval)
     }
 
     @Test

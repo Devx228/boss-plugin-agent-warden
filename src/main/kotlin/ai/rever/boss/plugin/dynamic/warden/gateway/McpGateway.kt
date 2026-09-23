@@ -8,6 +8,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -109,6 +110,8 @@ class McpGateway(
         bound.createContext("/mcp") { exchange -> handle(exchange) }
         // Bounded pool. An agent pipelines calls, and the default single-threaded
         // executor would queue every other request behind an open approval dialog.
+        // Sized for what holds a thread for minutes rather than milliseconds: each
+        // client's GET event stream, and every call queued behind an approval.
         bound.executor = Executors.newFixedThreadPool(WORKER_THREADS)
         bound.start()
         server = bound
@@ -130,6 +133,10 @@ class McpGateway(
 
     private fun handle(exchange: HttpExchange) {
         try {
+            if (!isLocalRequest(exchange)) {
+                respond(exchange, STATUS_FORBIDDEN, emptyMap(), "not a local client".toByteArray())
+                return
+            }
             when (exchange.requestMethod.uppercase()) {
                 "POST" -> handlePost(exchange)
                 // GET carries the server-to-client notification stream and DELETE ends a
@@ -147,16 +154,28 @@ class McpGateway(
 
     private fun handlePost(exchange: HttpExchange) {
         val body = exchange.requestBody.readBytes()
-        val message = parseObject(body)
-        val method = message?.stringOrNull("method")
+        val parsed = runCatching { gatewayJson.parseToJsonElement(body.decodeToString()) }.getOrNull()
+        // Fails closed. Anything that is not one JSON object used to be forwarded
+        // unread, so a JSON-RPC batch - an array - carried a tools/call for a refused
+        // tool straight past every check, unrecorded.
+        val message = parsed as? JsonObject ?: return rejectUnreadable(exchange, parsed)
+        val method = message.stringOrNull("method")
 
         if (method == "tools/call") {
             val params = message["params"] as? JsonObject
-            val toolName = params?.stringOrNull("name")
-            if (toolName != null) {
-                interceptToolCall(exchange, body, message, toolName, params["arguments"])
+            // A string, not any primitive: a number or null would become a tool name
+            // this gateway judged and the upstream then read differently.
+            val toolName = (params?.get("name") as? JsonPrimitive)?.takeIf { it.isString }?.content
+            if (toolName == null) {
+                record(
+                    nextRecordId(), System.currentTimeMillis(), UNNAMED_TOOL, Capability.UNKNOWN,
+                    Outcome.BLOCKED, Redactor.preview(params?.get("arguments")), NO_TOOL_NAME,
+                )
+                answer(UNNAMED_TOOL) { refuse(exchange, message, NO_TOOL_NAME) }
                 return
             }
+            interceptToolCall(exchange, body, message, toolName, params["arguments"])
+            return
         }
 
         val response = forward(body, exchange)
@@ -203,8 +222,11 @@ class McpGateway(
                     // thread the gateway owns, the call genuinely cannot proceed until a
                     // person answers, and MCP has no "pending" reply to send in the interim.
                     val askedAt = System.currentTimeMillis()
-                    val approval = runBlocking { approve(toolName, capability, preview) }
-                    waitedMillis = System.currentTimeMillis() - askedAt
+                    // The operator sees the arguments in full; only the record is redacted.
+                    val approval = runBlocking { approve(toolName, capability, Redactor.forOperator(arguments)) }
+                    // A live grant answered without asking anybody, so there was no wait.
+                    waitedMillis =
+                        if (approval == ApprovalOutcome.GRANTED) null else System.currentTimeMillis() - askedAt
                     if (!approval.allowed) {
                         // Before the write, for the reason given on the Deny branch above.
                         // This one matters more: an approval takes as long as a person
@@ -223,7 +245,22 @@ class McpGateway(
             }
 
         val forwardedAt = System.currentTimeMillis()
-        val response = forward(body, exchange)
+        val response =
+            try {
+                forward(body, exchange)
+            } catch (e: Exception) {
+                // Recorded before rethrowing, or an allowed call that timed out upstream
+                // - a long command that did run - left no trace at all. handle() still
+                // answers 502.
+                record(
+                    id, startedAt, toolName, capability, Outcome.FAILED, preview,
+                    detail = "$UPSTREAM_FAILED ${e.message ?: e.javaClass.simpleName}",
+                    waitedForOperatorMillis = waitedMillis,
+                    upstreamMillis = System.currentTimeMillis() - forwardedAt,
+                    declaredCapability = declared.takeIf { downgraded },
+                )
+                throw e
+            }
         val upstreamMillis = System.currentTimeMillis() - forwardedAt
         val outcome = if (looksLikeToolError(response.body())) Outcome.FAILED else allowedOutcome
         record(
@@ -235,6 +272,62 @@ class McpGateway(
         answer(toolName) {
             respond(exchange, response.statusCode(), passthroughHeaders(response), response.body())
         }
+    }
+
+    /**
+     * Refuses a body that is not a single JSON object, without forwarding it.
+     *
+     * Every `tools/call` inside a batch is still recorded, one row each, because a
+     * refusal nobody can see is how the batch hole stayed invisible. MCP clients do
+     * not batch in practice, so nothing legitimate is lost.
+     */
+    private fun rejectUnreadable(exchange: HttpExchange, parsed: JsonElement?) {
+        (parsed as? JsonArray)?.forEach { item ->
+            val call = (item as? JsonObject)?.takeIf { it.stringOrNull("method") == "tools/call" } ?: return@forEach
+            val params = call["params"] as? JsonObject
+            val name = (params?.get("name") as? JsonPrimitive)?.takeIf { it.isString }?.content ?: UNNAMED_TOOL
+            record(
+                nextRecordId(), System.currentTimeMillis(), name, ToolCatalog.capabilityOf(name),
+                Outcome.BLOCKED, Redactor.preview(params?.get("arguments")), BATCH_REFUSED,
+            )
+        }
+        val error =
+            buildJsonObject {
+                put("jsonrpc", "2.0")
+                put("id", JsonNull)
+                putJsonObject("error") {
+                    put("code", INVALID_REQUEST)
+                    put("message", if (parsed is JsonArray) BATCH_REFUSED else NOT_ONE_OBJECT)
+                }
+            }
+        val headers = mapOf("content-type" to "application/json")
+        respond(exchange, STATUS_BAD_REQUEST, headers, error.toString().toByteArray())
+    }
+
+    /**
+     * Whether a request plausibly comes from a local client rather than a web page.
+     *
+     * Binding to loopback does not stop a browser reaching this port. A page can
+     * post to it cross-origin, and with DNS rebinding its own hostname resolves here
+     * and the request is same-origin. The MCP transport spec requires servers to
+     * validate `Origin` for exactly this reason, and the embedded browser an agent
+     * can navigate makes it more than theoretical. A rebound request carries the
+     * attacker's name in `Host`; a cross-origin one carries it in `Origin`. Local
+     * clients send neither, or a loopback name in both.
+     */
+    private fun isLocalRequest(exchange: HttpExchange): Boolean {
+        val host = exchange.requestHeaders.getFirst("host")
+        if (host != null && hostnameOf(host) !in LOOPBACK_NAMES) return false
+        val origin = exchange.requestHeaders.getFirst("origin") ?: return true
+        val originHost = runCatching { URI(origin).host }.getOrNull() ?: return false
+        return originHost.lowercase() in LOOPBACK_NAMES
+    }
+
+    /** `host:port`, `host` or `[::1]:port` to the bare lowercase name. */
+    private fun hostnameOf(hostHeader: String): String {
+        val trimmed = hostHeader.trim().lowercase()
+        if (trimmed.startsWith("[")) return trimmed.substringBefore("]") + "]"
+        return trimmed.substringBefore(":")
     }
 
     private fun judgeCommand(declared: Capability, toolName: String, arguments: JsonObject?): Capability =
@@ -395,9 +488,18 @@ class McpGateway(
 
     private companion object {
         const val LOOPBACK = "127.0.0.1"
-        const val WORKER_THREADS = 8
+        const val WORKER_THREADS = 32
         const val STATUS_OK = 200
+        const val STATUS_BAD_REQUEST = 400
+        const val STATUS_FORBIDDEN = 403
         const val STATUS_METHOD_NOT_ALLOWED = 405
+        const val INVALID_REQUEST = -32600
+        const val UNNAMED_TOOL = "(unnamed)"
+        const val NO_TOOL_NAME = "Refused: tools/call without a string tool name cannot be judged."
+        const val BATCH_REFUSED = "Refused: batched JSON-RPC requests are not accepted by Agent Warden."
+        const val NOT_ONE_OBJECT = "Refused: the request body is not a single JSON-RPC object."
+        const val UPSTREAM_FAILED = "Forwarded, then the upstream leg failed, so it may or may not have run:"
+        val LOOPBACK_NAMES = setOf("127.0.0.1", "localhost", "[::1]", "::1")
         const val STATUS_BAD_GATEWAY = 502
         const val UPSTREAM_TIMEOUT_MINUTES = 5L
         const val STREAM_TIMEOUT_MINUTES = 30L

@@ -2,7 +2,7 @@
 
 What has been tested, how, and what has not been.
 
-## Automated: 228 tests
+## Automated: 249 tests
 
 ```bash
 ./gradlew test
@@ -10,18 +10,18 @@ What has been tested, how, and what has not been.
 
 | Suite | Tests | What it pins |
 |---|---:|---|
-| `McpGatewayTest` | 36 | Wire behaviour over real sockets against a recording fake upstream |
-| `WardenRuntimeTest` | 27 | Orchestration end to end with no BOSS running |
+| `McpGatewayTest` | 45 | Wire behaviour over real sockets against a recording fake upstream |
+| `WardenRuntimeTest` | 31 | Orchestration end to end with no BOSS running |
 | `SessionReportTest` | 23 | What the report must never omit and never claim |
 | `SessionRecorderTest` | 19 | Concurrency, capping, and event collapsing |
 | `TraceLogTest` | 16 | Durability, redaction, rotation, and failing without taking a call down |
-| `CommandRiskTest` | 15 | Which shell commands may skip the operator, mostly by counting the ones that may not |
+| `CommandRiskTest` | 20 | Which shell commands may skip the operator, mostly by counting the ones that may not |
 | `WardenMcpToolsTest` | 15 | The agent-facing contract, including what is deliberately absent |
 | `ToolCatalogTest` | 12 | Classification, including the bug found in live testing |
-| `ApprovalCoordinatorTest` | 11 | Serialisation, timeouts, and fail-closed behaviour |
+| `ApprovalCoordinatorTest` | 12 | Serialisation, timeouts, and fail-closed behaviour |
 | `PolicyTest` | 11 | The decision matrix, exhaustively |
 | `WardenDeepLinksTest` | 11 | Deep-link actions, and the policy change that is refused |
-| `RedactorTest` | 9 | Redaction, written from the leak backwards |
+| `RedactorTest` | 11 | Redaction, written from the leak backwards |
 | `GrantBookTest` | 8 | Expiry against an injected clock, and thread safety |
 | `HostGovernanceGapTest` | 8 | The claim about BossConsole, including the tool deliberately excluded from it |
 | `ReportLocationTest` | 7 | Where reports go when the host answers blank |
@@ -543,6 +543,49 @@ rather than refusing to load, and that has its own test.
   the two accounts is legible. Whether to shorten the wait, or to answer early once
   a client is known to be gone, is still open. The panel warns the operator past two
   minutes rather than deciding it for them.
+
+## A review pass, 23 September 2026
+
+A read of the whole plugin, with each suspected defect first written as a test
+asserting the current behaviour. All seven such probes passed, so all seven were
+real, and each is now pinned by a test asserting the fix. Run with `./gradlew test`,
+not against a live BOSS.
+
+1. **`CommandRisk` skipped git's global options.** It took the first token not
+   starting with `-` as the subcommand, so `git --config-env=diff.external=SHELL
+   diff --ext-diff` was judged a read. Reproduced against git 2.42: that line runs
+   every modified file in the working tree as a shell script. `--config-env=
+   core.pager=SHELL log` pipes commit messages into a shell. `git log --output=`
+   and `git diff --output=` overwrite files, as do `tree -o` and `tree -R`. Only
+   `--no-pager` may now precede the subcommand, and writing flags escalate. `%NAME%`
+   and `!` join the refused expansions.
+2. **The approval dialog showed the ledger's truncated preview**, so the tail of a
+   long command, where `&& curl ... | sh` goes, was never on screen. The dialog
+   now shows the arguments in full, and says so in words when they are too long.
+   The ledger keeps its redacted copy.
+3. **A grant for one unrecognised tool allowed every unrecognised tool** for
+   twenty minutes, because grants are keyed by capability. UNKNOWN is no longer
+   grantable, and the dialog no longer offers it.
+4. **GRANTED never reached the ledger.** The runtime answered Allow for a live
+   grant before the coordinator ran, so a standing permission was recorded as the
+   profile's own.
+5. **An allowed call whose upstream leg threw left no record**, including a long
+   command that ran and then timed out. It is now recorded as FAILED first.
+6. **A body that was not one JSON object was forwarded unread.** A JSON-RPC batch
+   carried `manage_tools` past every check, unrecorded. Arrays, unparseable bodies
+   and a `tools/call` without a string name are now refused, and every call in a
+   refused batch is recorded. Whether BossTerm executes batches was not checked
+   against a live host; the gateway no longer depends on the answer.
+7. **A call arriving after "End session" vanished** from the panel and the report.
+   One now opens the next session. The agent can end a session itself, through
+   `cli` and a `boss://` link.
+
+Also changed in the same pass: the trace moved from the project to
+`~/.agent-warden/`, where the agent cannot `cat` or `rm` it; the gateway refuses
+requests whose `Host` or `Origin` is not loopback, as the MCP transport spec
+requires against DNS rebinding; a settings change no longer creates a second
+approval queue beside the first; and the worker pool grew from 8 to 32 threads,
+since event streams and queued approvals each hold one for minutes.
 
 ## What has not been tested
 
