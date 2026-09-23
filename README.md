@@ -229,7 +229,7 @@ which is also what Toolbox's **From GitHub** installs. To build it yourself:
 ```
 
 Then in BOSS, open **Toolbox**, choose **From File**, and select
-`build/libs/boss-plugin-agent-warden-0.3.0.jar`. Enable it and follow any reload
+`build/libs/boss-plugin-agent-warden-0.3.1.jar`. Enable it and follow any reload
 prompt. The panel appears under the tool picker as **Agent Warden**, and the
 gateway starts on port 7678.
 

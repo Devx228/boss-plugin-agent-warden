@@ -97,7 +97,7 @@ class WardenPanelComponent(
                 Modifier.fillMaxSize().background(BossThemeColors.BackgroundColor).padding(10.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                StatusHeader(status.running, status.port, status.lastError)
+                StatusHeader(status.running, status.port, status.lastError, attached = session.records.isNotEmpty())
                 // Above the policy card on purpose. It is the only thing in this panel
                 // that is asking the operator for something, and a held call is the one
                 // state where reading the rest first would be reading it too late.
@@ -200,7 +200,7 @@ class WardenPanelComponent(
     // ---- header --------------------------------------------------------------
 
     @Composable
-    private fun StatusHeader(running: Boolean, port: Int?, error: String?) {
+    private fun StatusHeader(running: Boolean, port: Int?, error: String?, attached: Boolean) {
         Card {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Dot(if (running) BossThemeColors.SuccessColor else BossThemeColors.TextMuted)
@@ -223,12 +223,17 @@ class WardenPanelComponent(
                 Spacer(Modifier.height(6.dp))
                 Label("Could not start: $it", color = BossThemeColors.ErrorColor)
             }
-            Spacer(Modifier.height(6.dp))
-            Label(
-                "Point your agent at this endpoint instead of BOSS's own to have its calls pass through here.",
-                color = BossThemeColors.TextMuted,
-                size = 10,
-            )
+            // Only until calls arrive. At the height BOSS first gives this panel, this
+            // line was part of what pushed the call list below the fold, and once calls
+            // are flowing the agent is plainly attached and the advice is spent.
+            if (!attached) {
+                Spacer(Modifier.height(6.dp))
+                Label(
+                    "Point your agent at this endpoint instead of BOSS's own to have its calls pass through here.",
+                    color = BossThemeColors.TextMuted,
+                    size = 10,
+                )
+            }
         }
     }
 
@@ -237,9 +242,12 @@ class WardenPanelComponent(
     @Composable
     private fun ProfileSelector(active: Profile, onSelect: (Profile) -> Unit) {
         Card {
-            Label("Policy", bold = true)
-            Spacer(Modifier.height(6.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            // The heading shares the row with the choices rather than taking a line of
+            // its own, which at the panel's opening height was the line the call list
+            // needed. See docs/PANEL-REVIEW.md, item one.
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Label("Policy", bold = true)
+                Spacer(Modifier.width(4.dp))
                 for (profile in Profile.ALL) {
                     val selected = profile.id == active.id
                     Box(
