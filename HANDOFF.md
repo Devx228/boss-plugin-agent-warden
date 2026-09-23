@@ -4,8 +4,9 @@ Written for whoever picks this up next, human or agent. It is not a summary of t
 It records what was decided, what was checked, what is unverified, and where the sharp edges
 are, so the next person argues with the reasoning rather than rediscovering it.
 
-Context: BOSS Contributor Hackathon, submissions close **20 September 2026, 23:59 IST**.
-Owner: Devansh (@Devx228). Today is 11 September 2026, so there are nine days left.
+Context: BOSS Contributor Hackathon. The published close was **20 September 2026, 23:59
+IST**; confirm the current deadline before relying on it. Owner: Devansh (@Devx228). Last
+updated 23 September 2026.
 
 **The goal is to win.** That is worth stating because it changes what "done" means. A plugin
 that works is not the target; a submission a maintainer finds hard to argue with is. What has
@@ -179,6 +180,17 @@ Each of these has cost someone time already. Change them only with the reason in
   usefulness on a session that did not demonstrate it is advertising, not evidence.
 - **The report states its own limits in `appendHowToRead`.** A report that overstates what it
   proves is worse than no report, because it gets believed.
+- **Anything the gateway cannot judge is refused, not relayed.** A body that is not one JSON
+  object, a JSON-RPC batch, and a `tools/call` without a string name all used to be forwarded
+  unread. A batch carried `manage_tools` past every check. Each is now refused and recorded.
+- **UNKNOWN is never grantable.** Grants are keyed by capability, so "allow for a while" on one
+  unrecognised tool used to cover every unrecognised tool. The dialog no longer offers it.
+- **The approval dialog shows arguments in full; only records are redacted.** The dialog used
+  to show the ledger's 80-character preview, which hid the tail of a long command.
+- **The trace lives in `~/.agent-warden/`, never the project.** In the project the agent could
+  `cat` it, delete it under Build, or commit it.
+- **Non-loopback `Host` or `Origin` is refused.** The MCP transport spec requires it, against
+  DNS rebinding, and the agent can steer an embedded browser.
 - **Only JDK HTTP is used.** The plugin jar bundles only its own classes, so a third-party HTTP
   library would resolve at compile time and be missing at runtime.
 - **The trace opens, appends and closes per line rather than holding a stream.** A syscall per
@@ -199,9 +211,10 @@ Each of these has cost someone time already. Change them only with the reason in
 ## 5. State as of handoff
 
 - **249 tests, zero failures, zero errors, zero skipped.** `./gradlew test`
-- **Jar builds**, about 360 KB. `./gradlew clean buildPluginJar`
+- **Jar builds**, about 370 KB. `./gradlew clean buildPluginJar`
 - **CI is green on a clean Linux runner**, tests and jar, with the jar uploaded as an artifact.
-- **Released as v0.2.0** with the jar attached.
+- **Released as v0.3.1** with the jar attached. v0.2.0 predates the fixes below and should
+  not be installed.
 - **Version pins checked.** `apiVersion 1.0.87` against a host on 1.0.89: major equal, host
   minor greater or equal, and the plugin docs say to pin low deliberately. `minBossVersion
   9.5.0` is the range it is written for, not the range it has been run on, which is 9.5.7 and
@@ -225,6 +238,18 @@ Each of these has cost someone time already. Change them only with the reason in
 
 Each is pinned by a test that fails when the fix is removed.
 
+### What the 23 September review pass found and fixed
+
+Seven defects, each first written as a test asserting the buggy behaviour, all seven of
+which passed. Full list in `docs/VALIDATION.md`, "A review pass, 23 September 2026". The
+worst was the `git branch -D` class again: `CommandRisk` skipped git's global options, so
+`git --config-env=diff.external=SHELL diff --ext-diff`, which runs every modified file as a
+shell script, was judged a read. Released as v0.3.0 (PR #4); v0.3.1 (PR #5) then compacted
+the panel's top cards, which has **not been looked at in a running BOSS**.
+
+Not verified live: whether BossTerm executes JSON-RPC batches. The gateway refuses them
+either way.
+
 ### What was added
 
 - **A durable trace.** Everything used to live in memory until somebody pressed Export.
@@ -246,9 +271,9 @@ against it is in `docs/VALIDATION.md`. Current position:
 
 | Milestone | State |
 |---|---|
-| Share the source | Done. Public repo, v0.2.0 release with the jar |
+| Share the source | Done. Public repo, v0.3.1 release with the jar |
 | Proposal in boss-plugins Issues | **boss-plugins#33**, open, tags @kshivang for review |
-| Umbrella registration | **boss-plugins#31** open, but opened *before* the proposal, which is the wrong order. A comment on it says so and offers to close |
+| Umbrella registration | **boss-plugins#31** open, gitlink at v0.3.1 (`1af87b4`). Opened *before* the proposal, which is the wrong order; a comment on it says so |
 | Store publication | Not requested. Maintainer decision, needs credentials this repo should not ask for |
 
 Two guide rules that were being broken and are now fixed, so do not reintroduce them:
@@ -271,13 +296,15 @@ Two guide rules that were being broken and are now fixed, so do not reintroduce 
 | BossConsole#514 | `projectPath` returns null instead of empty string | open PR |
 | BossConsole#527 | CLI shims and deep-link handler agree on parameter names | open PR |
 | BossConsole#332 | the original proposal for operator approval and evidence capture | open issue |
-| boss-plugins#33 | the plugin proposal | open issue |
-| boss-plugins#31 | the submodule entry | open PR, out of order |
+| boss-plugins#33 | the plugin proposal | open issue, no replies yet |
+| boss-plugins#31 | the submodule entry | open PR, out of order, at v0.3.1 |
 | BossConsole#416 | kshivang's own issue asking for an agent-trace plugin | theirs |
 | BossConsole#432, #434 | others' work on host observations and an MCP timeline | others' |
 
-All five BossConsole PRs are mergeable and waiting on a maintainer approving a CI run. That wait
-is not ours to end. **Do not open more PRs into BossConsole to pad a count.** The guide warns
+All five BossConsole PRs are drafts waiting on a maintainer: a fork CI approval, and a refresh
+against dev they now conflict with. #496's last review item (`docs/CLI.md`) went in at
+`b93f36d2`, which re-opens its fork approval. That wait is not ours to end; offer to rebase,
+do not rebase unasked. **Do not open more PRs into BossConsole to pad a count.** The guide warns
 against it and a maintainer will read it as noise.
 
 ---
@@ -293,6 +320,10 @@ you are straight back to the prompt fatigue that `CommandRisk` was written to fi
 hand-written table does not solve this. Getting the `readOnly` flag onto the discovery wire does,
 and that is exactly what **BossConsole#496** already proposes. That would join the host PRs to
 the plugin, which is a much better story than either alone.
+
+One trap, found by #496's reviewer: `McpToolDefinition.readOnly` defaults to `true`, so on the
+wire an undeclared tool, `browser_run_js` included, claims to be read-only. The plugin must
+only ever let `readOnly: false` *raise* a tool's risk, never let `true` lower it.
 
 **2. Detect the bypass.** The honest weakness, stated in the README, is that nothing stops an
 agent pointing back at 7677. That cannot be closed from a plugin. It can be *detected*: compare
@@ -310,9 +341,10 @@ layer for a database plugin is the same idea as this one applied to a different 
 is unexplored and is the most likely place a second plugin lives.**
 
 **4. The panel's layout.** `docs/PANEL-REVIEW.md` is an honest critique written after seeing it
-running. Items 4 and 5 are fixed and the call list was rebuilt. One, two, three, six and seven
-are still open, and the first one is real: at the height BOSS gives it when you open it, the
-panel shows the gateway card and the word "Policy" and nothing else.
+running. Items 4 and 5 are fixed and the call list was rebuilt. Item one is partly addressed in
+v0.3.1, which gives the call list two lines back at the opening height, but nobody has looked at
+it running; do that first, and retake `docs/panel.png` and `docs/panel-in-session.png`, which
+show the old layout. Two, three, six and seven are still open.
 
 **5. The approval timeout outlives the clients it serves.** The coordinator waits five minutes;
 Claude Code gives up at two. Both halves are now in the trace so the disagreement is legible.
