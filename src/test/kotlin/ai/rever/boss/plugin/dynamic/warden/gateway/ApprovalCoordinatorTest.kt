@@ -47,6 +47,23 @@ class ApprovalCoordinatorTest {
     }
 
     @Test
+    fun `approving an unknown tool for a while grants nothing`() = runTest {
+        // Grants are keyed by capability, so one for UNKNOWN would silently cover
+        // every unclassified tool, including ones the operator has never seen.
+        val grants = GrantBook()
+        val asked = AtomicInteger()
+        val c =
+            coordinator(grants) {
+                asked.incrementAndGet()
+                ApprovalChoice.FOR_A_WHILE
+            }
+        assertEquals(ApprovalOutcome.APPROVED, c.requestApproval("mystery_tool", Capability.UNKNOWN, "{}"))
+        assertFalse(grants.isGranted(Capability.UNKNOWN))
+        assertEquals(ApprovalOutcome.APPROVED, c.requestApproval("secret_get", Capability.UNKNOWN, "{}"))
+        assertEquals(2, asked.get(), "the second unknown tool was never put to the operator")
+    }
+
+    @Test
     fun `a grant covers a different tool of the same capability`() = runTest {
         // Approving run_command and then being asked again for send_input, which can
         // drive the very shell just authorised, would be security theatre.

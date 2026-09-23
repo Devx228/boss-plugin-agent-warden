@@ -69,6 +69,19 @@ class SessionRecorder(private val clock: () -> Long = System::currentTimeMillis)
         }
 
     /** Ignored when not recording, so a stray call from a gateway shutting down cannot resurrect a session. */
+    /**
+     * Starts a session only if none is open, and says whether it did.
+     *
+     * Atomic because two calls can arrive at once on the gateway's pool, and a
+     * separate check and start would let the second wipe the first's session.
+     */
+    fun startIfIdle(label: String, profileName: String, projectPath: String?): Boolean =
+        synchronized(lock) {
+            if (isRecording) return false
+            start(label, profileName, projectPath)
+            true
+        }
+
     fun record(entry: InvocationRecord) =
         mutate { it.copy(records = (it.records + entry).takeLast(MAX_RECORDS)) }
 

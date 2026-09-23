@@ -80,26 +80,28 @@ class WardenRuntime(
     private var gateway: McpGateway? = null
     private var fileWatch: Job? = null
 
-    private var coordinator: ApprovalCoordinator = buildCoordinator(WardenSettings())
+    private val coordinator: ApprovalCoordinator = buildCoordinator(WardenSettings())
 
     /** Exposed so the panel can say "waiting on you" instead of looking frozen. */
-    val pendingApproval get() = coordinator.pendingRequests
+    val pendingApproval = coordinator.pendingRequests
 
     /**
      * The durable half of the record, opened lazily on first use.
      *
-     * Lazy because the directory depends on the host's project path, which is not
-     * knowable at construction and can be blank; resolving it once at first write
-     * avoids both a constructor that can fail and a path chosen before the host was
-     * ready to answer.
+     * Lazy because the directory comes from the host, which may not be ready to
+     * answer at construction; resolving it once at first write avoids both a
+     * constructor that can fail and a path chosen before the host could answer.
      */
     @Volatile
     private var trace: TraceLog? = null
 
     private fun traceLog(): TraceLog? {
         trace?.let { return it }
+        // The home directory, never the project. Inside the project the agent could
+        // read its own supervision record with a plain `cat`, delete or edit it with
+        // one shell command under Build, and commit it with `git add -A`.
         val base =
-            ReportLocation.resolveBaseDirectory(host.projectPath, null)
+            ReportLocation.resolveBaseDirectory(projectPath = null, homeDirectory = host.homeDirectory)
                 ?: return null
         val opened =
             TraceLog(
@@ -128,7 +130,7 @@ class WardenRuntime(
     fun initialise() {
         scope.launch {
             val loaded = runCatching { settingsStore.load() }.getOrElse { WardenSettings() }.sanitised()
-            coordinator = buildCoordinator(loaded)
+            coordinator.reconfigure(loaded.approvalTimeoutMillis, loaded.grantDurationMillis)
             _status.value = _status.value.copy(settings = loaded)
             if (loaded.gatewayEnabled) start()
         }
@@ -178,17 +180,29 @@ class WardenRuntime(
                 val instance =
                     McpGateway(
                         upstream = URI.create(settings.upstreamUrl),
-                        decide = { _, capability ->
-                            if (grants.isGranted(capability)) {
-                                ai.rever.boss.plugin.dynamic.warden.gateway.Decision.Allow
-                            } else {
-                                _status.value.profile.decide(capability)
-                            }
-                        },
+                        // Live grants are not consulted here. An Ask reaches the
+                        // coordinator, which answers GRANTED from the grant without
+                        // asking, so the ledger can tell a standing permission from the
+                        // profile. Answering Allow here recorded every one as ALLOWED.
+                        decide = { _, capability -> _status.value.profile.decide(capability) },
                         approve = { tool, capability, preview ->
                             coordinator.requestApproval(tool, capability, preview)
                         },
                         onRecord = { record ->
+                            // A call with no session open used to be dropped from the panel
+                            // and the report. Ending a session is one click, or one boss://
+                            // link the agent can send itself through `cli`, so a call after
+                            // it opens the next session instead.
+                            val opened =
+                                recorder.startIfIdle(
+                                    SessionRecorder.DEFAULT_LABEL, _status.value.profile.name, host.projectPath,
+                                )
+                            if (opened) {
+                                traceLog()?.session(sessionId(), "session opened by a call arriving with none open")
+                                scope.launch {
+                                    runCatching { host.gitSnapshot() }.getOrNull()?.let(recorder::updateGit)
+                                }
+                            }
                             recorder.record(record)
                             traceLog()?.call(sessionId(), record)
                         },
@@ -270,7 +284,7 @@ class WardenRuntime(
             val restartNeeded =
                 next.preferredPort != _status.value.settings.preferredPort ||
                     next.upstreamUrl != _status.value.settings.upstreamUrl
-            coordinator = buildCoordinator(next)
+            coordinator.reconfigure(next.approvalTimeoutMillis, next.grantDurationMillis)
             _status.value = _status.value.copy(settings = next)
             runCatching { settingsStore.save(next) }
             if (restartNeeded && _status.value.running) start()

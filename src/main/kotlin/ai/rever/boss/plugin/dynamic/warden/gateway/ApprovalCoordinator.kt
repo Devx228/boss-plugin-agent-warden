@@ -68,10 +68,22 @@ data class ApprovalRequest(
 class ApprovalCoordinator(
     private val prompt: ApprovalPrompt,
     private val grants: GrantBook,
-    private val timeoutMillis: Long = DEFAULT_TIMEOUT_MILLIS,
-    private val grantDurationMillis: Long = GrantBook.DEFAULT_DURATION_MILLIS,
+    @Volatile private var timeoutMillis: Long = DEFAULT_TIMEOUT_MILLIS,
+    @Volatile private var grantDurationMillis: Long = GrantBook.DEFAULT_DURATION_MILLIS,
 ) {
     private val mutex = Mutex()
+
+    /**
+     * Applies new settings in place.
+     *
+     * Replacing the coordinator instead gave the runtime two of them, each with its
+     * own [mutex], so a settings change while a dialog was up let a second dialog
+     * open beside it, which is the confusion the mutex exists to prevent.
+     */
+    fun reconfigure(timeoutMillis: Long, grantDurationMillis: Long) {
+        this.timeoutMillis = timeoutMillis
+        this.grantDurationMillis = grantDurationMillis
+    }
 
     private val _pending = MutableStateFlow<ApprovalRequest?>(null)
 
@@ -119,7 +131,11 @@ class ApprovalCoordinator(
                 when (askWithTimeout(request)) {
                     ApprovalChoice.ONCE -> ApprovalOutcome.APPROVED
                     ApprovalChoice.FOR_A_WHILE -> {
-                        grants.grant(capability, grantDurationMillis)
+                        // Never for UNKNOWN. Grants are keyed by capability, so a grant
+                        // here would cover every unclassified tool, including ones the
+                        // operator has never seen, which is the blanket permission
+                        // Profile.decide refuses to give for the same reason.
+                        if (capability != Capability.UNKNOWN) grants.grant(capability, grantDurationMillis)
                         ApprovalOutcome.APPROVED
                     }
                     ApprovalChoice.DENY -> ApprovalOutcome.REFUSED

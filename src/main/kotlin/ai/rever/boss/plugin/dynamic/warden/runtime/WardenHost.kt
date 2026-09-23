@@ -28,6 +28,14 @@ interface WardenHost {
     val projectPath: String?
 
     /**
+     * The operator's home directory, where the durable trace lives.
+     *
+     * Behind the seam so tests can point it somewhere disposable instead of
+     * appending to the real trace of whoever runs them.
+     */
+    val homeDirectory: String?
+
+    /**
      * Null when the host exposes no event bus. The runtime then records no file
      * evidence and the report says the section is empty rather than implying nothing
      * changed.

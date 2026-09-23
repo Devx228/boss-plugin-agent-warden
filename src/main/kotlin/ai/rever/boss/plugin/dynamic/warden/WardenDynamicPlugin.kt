@@ -57,7 +57,7 @@ object WardenPanelInfo : PanelInfo {
 class WardenDynamicPlugin : DynamicPlugin {
     override val pluginId = WARDEN_PLUGIN_ID
     override val displayName = "Agent Warden"
-    override val version = "0.2.0"
+    override val version = "0.3.0"
     override val description =
         "Puts an approval and audit layer in front of the MCP tools an agent can call in BOSS. " +
             "Records every call, escalates high-risk ones to you, refuses changes to the tool " +

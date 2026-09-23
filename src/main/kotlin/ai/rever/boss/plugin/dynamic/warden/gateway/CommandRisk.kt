@@ -55,8 +55,19 @@ object CommandRisk {
      * `$` is rejected wholesale rather than only as `$(`: variable expansion alone is
      * harmless, and telling the two apart reliably is exactly the kind of parsing
      * this must not depend on being right about.
+     *
+     * `!` is here for the same reason on other shells: it is bash history expansion
+     * and cmd's delayed expansion, either of which splices text this gateway never
+     * saw into the line.
      */
-    private val SHELL_METACHARACTERS = Regex("""[|;&<>`$(){}\n\r\\]""")
+    private val SHELL_METACHARACTERS = Regex("""[|;&<>`$(){}!\n\r\\]""")
+
+    /**
+     * cmd's `%NAME%` expansion, so `echo %GITHUB_TOKEN%` is the credential dump `env`
+     * is kept off the list for. Matched as a name rather than any `%`, because
+     * `date +%Y-%m-%d` is the common case and contains no variable.
+     */
+    private val CMD_VARIABLE = Regex("""%[A-Za-z_][A-Za-z0-9_]*(:[^%]*)?%""")
 
     /**
      * Programs that read and cannot do anything else.
@@ -98,6 +109,25 @@ object CommandRisk {
         setOf("-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "--list", "--show-current")
 
     /**
+     * The only option allowed between `git` and its subcommand.
+     *
+     * Everything else there is rejected, not screened. Global options reconfigure git
+     * for the one invocation: `--config-env=diff.external=SHELL` makes `git diff` run
+     * each modified file as a shell script, and `--config-env=core.pager=SHELL` pipes
+     * `git log` into one. Both look like a read to anything that only checks the
+     * subcommand, which is what this used to do.
+     */
+    private val SAFE_GIT_GLOBAL_OPTIONS = setOf("--no-pager")
+
+    /**
+     * Prefixes of subcommand flags that make a reading subcommand write or execute.
+     *
+     * `--output=<file>` is accepted by `log`, `diff` and `show` and overwrites the
+     * file. `--ext-diff` and `--textconv` hand content to a configured program.
+     */
+    private val GIT_WRITING_FLAGS = listOf("--output", "--ext-diff", "--textconv")
+
+    /**
      * Search tools, and the flags that turn them back into a way to run something.
      *
      * `grep` has no such flag. `rg` has `--pre`, which hands each file to a program
@@ -132,6 +162,7 @@ object CommandRisk {
         val line = script.trim()
         if (line.isEmpty()) return false
         if (SHELL_METACHARACTERS.containsMatchIn(line)) return false
+        if (CMD_VARIABLE.containsMatchIn(line)) return false
         if ('"' in line || '\'' in line) return false
 
         val tokens = line.split(Regex("""\s+""")).filter { it.isNotEmpty() }
@@ -143,16 +174,46 @@ object CommandRisk {
 
         val rest = tokens.drop(1)
         return when (program) {
-            in READ_ONLY_PROGRAMS -> true
-            "git" -> {
-                val subcommand = rest.firstOrNull { !it.startsWith("-") }?.lowercase()
-                when (subcommand) {
-                    "branch" -> rest.drop(rest.indexOfFirst { !it.startsWith("-") } + 1).all { it in BRANCH_LISTING_FLAGS }
-                    else -> subcommand in READ_ONLY_GIT
-                }
-            }
+            in READ_ONLY_PROGRAMS -> argumentsOnlyRead(program, rest)
+            "git" -> isReadOnlyGit(rest)
             in SEARCH_PROGRAMS -> rest.none { SEARCH_ESCAPE_HATCH.containsMatchIn(it) }
             else -> false
+        }
+    }
+
+    private fun isReadOnlyGit(args: List<String>): Boolean {
+        val fromSubcommand = args.dropWhile { it.lowercase() in SAFE_GIT_GLOBAL_OPTIONS }
+        val subcommand = fromSubcommand.firstOrNull()?.lowercase() ?: return false
+        if (subcommand.startsWith("-")) return false
+        val subArgs = fromSubcommand.drop(1)
+        if (subArgs.any { arg -> GIT_WRITING_FLAGS.any { arg.lowercase().startsWith(it) } }) return false
+        return when (subcommand) {
+            "branch" -> subArgs.all { it in BRANCH_LISTING_FLAGS }
+            else -> subcommand in READ_ONLY_GIT
+        }
+    }
+
+    /**
+     * The listed programs that write when given particular arguments.
+     *
+     * `tree -o <file>` writes its output, and `-R` writes `00Tree.html` into every
+     * directory. `file -C` compiles a magic file into the working directory. `date`
+     * with anything but a `+FORMAT` or a flag other than `-s` sets the clock, and
+     * `hostname` with any argument sets the name. The last two need privileges an
+     * agent in a container often has.
+     */
+    private fun argumentsOnlyRead(program: String, args: List<String>): Boolean {
+        fun shortCluster(arg: String, letters: String) =
+            arg.startsWith("-") && !arg.startsWith("--") && arg.any { it in letters }
+        return when (program) {
+            "tree" -> args.none { shortCluster(it, "oR") }
+            "file" -> args.none { shortCluster(it, "C") || it.startsWith("--compile") }
+            "date" ->
+                args.all {
+                    (it.startsWith("+") || it.startsWith("-")) && !shortCluster(it, "s") && !it.startsWith("--set")
+                }
+            "hostname" -> args.isEmpty()
+            else -> true
         }
     }
 

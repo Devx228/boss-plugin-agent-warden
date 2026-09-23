@@ -152,6 +152,60 @@ class CommandRiskTest {
     }
 
     @Test
+    fun `a git option before the subcommand is not skipped over`() {
+        // Checking only the first non-flag token let these through as reads. The first
+        // runs every modified file as a shell script; reproduced against git 2.42.
+        listOf(
+            "git --config-env=diff.external=SHELL diff --ext-diff",
+            "git --config-env=core.pager=SHELL log",
+            "git -c core.pager=sh log",
+            "git -C /tmp status",
+            "git --exec-path=. status",
+        ).forEach {
+            assertEquals(Capability.EXECUTE, effective(it), "a git global option was skipped over: $it")
+        }
+        assertEquals(Capability.READ_CONTENT, effective("git --no-pager log --oneline -5"))
+    }
+
+    @Test
+    fun `a reading git subcommand with a writing flag is not a read`() {
+        listOf(
+            "git log --output=.bashrc",
+            "git diff --output=src/Main.kt",
+            "git show --output=x HEAD",
+            "git diff --ext-diff",
+            "git log -p --textconv",
+        ).forEach {
+            assertEquals(Capability.EXECUTE, effective(it), "a writing git flag was judged a read: $it")
+        }
+    }
+
+    @Test
+    fun `listed programs are reads only without the arguments that make them write`() {
+        listOf("tree", "tree -L 2", "tree -a", "file README.md", "date", "date +%s", "date +%Y-%m-%d", "hostname")
+            .forEach { assertEquals(Capability.READ_CONTENT, effective(it), "should be a read: $it") }
+        listOf(
+            "tree -o notes.txt",
+            "tree -aR",
+            "file -C -m magic",
+            "date -s 2020-01-01",
+            "date --set=2020-01-01",
+            "date 010100002020",
+            "hostname attacker",
+        ).forEach {
+            assertEquals(Capability.EXECUTE, effective(it), "a writing form was judged a read: $it")
+        }
+    }
+
+    @Test
+    fun `cmd and history expansion are refused like dollar expansion`() {
+        // echo %GITHUB_TOKEN% is the credential dump env is kept off the list for.
+        listOf("echo %GITHUB_TOKEN%", "echo %PATH:~0,5%", "ls !!", "cat !-1").forEach {
+            assertEquals(Capability.EXECUTE, effective(it), "an expansion was judged a read: $it")
+        }
+    }
+
+    @Test
     fun `ripgrep cannot smuggle a program in through its preprocessor flag`() {
         // rg --pre hands every file to a program of the caller's choosing.
         assertEquals(Capability.EXECUTE, effective("rg --pre /tmp/evil.sh pattern"))

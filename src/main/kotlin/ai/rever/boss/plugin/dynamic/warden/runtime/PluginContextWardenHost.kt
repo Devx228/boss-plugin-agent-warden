@@ -4,6 +4,7 @@ import ai.rever.boss.plugin.api.DialogChoice
 import ai.rever.boss.plugin.api.PluginContext
 import ai.rever.boss.plugin.dynamic.warden.gateway.ApprovalChoice
 import ai.rever.boss.plugin.dynamic.warden.gateway.ApprovalRequest
+import ai.rever.boss.plugin.dynamic.warden.gateway.Capability
 import ai.rever.boss.plugin.dynamic.warden.session.GitFileDelta
 import ai.rever.boss.plugin.dynamic.warden.session.GitSnapshot
 import ai.rever.boss.plugin.logging.BossLogger
@@ -56,6 +57,9 @@ class PluginContextWardenHost(
      */
     override val projectPath: String?
         get() = runCatching { context.projectPath?.takeIf { it.isNotBlank() } }.getOrNull()
+
+    override val homeDirectory: String?
+        get() = System.getProperty("user.home")?.takeIf { it.isNotBlank() }
 
     override fun fileChanges(): Flow<HostFileChange>? =
         runCatching {
@@ -147,25 +151,32 @@ class PluginContextWardenHost(
             context.genericDialogProvider
                 ?: error("no dialog provider, so nothing can be approved") // fails closed
         val minutes = request.grantDurationMillis / 60_000
+        val choices =
+            listOfNotNull(
+                DialogChoice(CHOICE_ONCE, "Allow once", "Permit this one call. The next will ask again."),
+                // Not offered for an unrecognised tool: the coordinator will not grant
+                // one, and a button that silently acts as "once" would mislead.
+                DialogChoice(
+                    CHOICE_WHILE,
+                    "Allow for $minutes minutes",
+                    "Stop asking about ${request.capability.label.lowercase()} until the timer runs out.",
+                ).takeIf { request.capability != Capability.UNKNOWN },
+                DialogChoice(CHOICE_DENY, "Refuse", "The agent is told the call was refused."),
+            )
         val choice =
             dialogs.showChoiceDialog(
                 "Agent wants to ${request.capability.label.lowercase()}",
                 buildString {
                     appendLine("Tool: ${request.toolName}")
-                    appendLine("Arguments: ${request.argumentsPreview}")
+                    appendLine("Arguments:")
+                    appendLine(request.argumentsPreview)
                     appendLine()
                     append(request.capability.consequence)
                 },
-                listOf(
-                    DialogChoice(CHOICE_ONCE, "Allow once", "Permit this one call. The next will ask again."),
-                    DialogChoice(
-                        CHOICE_WHILE,
-                        "Allow for $minutes minutes",
-                        "Stop asking about ${request.capability.label.lowercase()} until the timer runs out.",
-                    ),
-                    DialogChoice(CHOICE_DENY, "Refuse", "The agent is told the call was refused."),
-                ),
-                DEFAULT_CHOICE_INDEX,
+                choices,
+                // Refuse is pre-selected. If a dialog implementation ever confirms a
+                // default on Enter, the reflex keystroke must not grant shell access.
+                choices.lastIndex,
             )
         return when (choice?.id) {
             CHOICE_ONCE -> ApprovalChoice.ONCE
@@ -253,12 +264,6 @@ class PluginContextWardenHost(
         const val CHOICE_ONCE = "once"
         const val CHOICE_WHILE = "while"
         const val CHOICE_DENY = "deny"
-
-        /**
-         * Refuse is pre-selected. If a dialog implementation ever confirms a default
-         * on Enter, the reflex keystroke must not be the one that grants shell access.
-         */
-        const val DEFAULT_CHOICE_INDEX = 2
     }
 }
 

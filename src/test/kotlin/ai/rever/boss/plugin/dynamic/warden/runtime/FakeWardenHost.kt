@@ -11,6 +11,8 @@ import java.util.concurrent.CopyOnWriteArrayList
 class FakeWardenHost(
     override var projectPath: String? = "/home/dev/project",
 ) : WardenHost {
+    override val homeDirectory: String? = java.nio.file.Files.createTempDirectory("warden-home").toString()
+
     val fileEvents = MutableSharedFlow<HostFileChange>(extraBufferCapacity = 64)
     val notifications = CopyOnWriteArrayList<String>()
     val errors = CopyOnWriteArrayList<String>()
