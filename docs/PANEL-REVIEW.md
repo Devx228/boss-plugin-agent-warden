@@ -5,9 +5,9 @@ running BOSS and looked at it properly.
 
 **Since written, four and five are fixed and the call list has been rebuilt** as
 the activity view described in the README, because a tracer nobody can read is not
-a tracer. One, two, three, six and seven are untouched and still stand. They are
-layout decisions worth making deliberately rather than in the same pass that found
-them.
+a tracer. One is partly addressed, below. Two, three, six and seven are untouched
+and still stand. They are layout decisions worth making deliberately rather than
+in the same pass that found them.
 
 Judged against BossConsole 9.5.11, light theme, a 1920 wide window, the panel
 docked where `plugin.json` puts it. Ordered by what I would change first.
@@ -26,6 +26,12 @@ and at the default height there is nothing left.
 
 Worth considering: collapse the gateway card to one line once it is running,
 since the endpoint is the only thing an operator copies and they copy it once.
+
+**Partly addressed on 23 September 2026, not yet seen in a running BOSS.** The
+gateway card drops its "point your agent here" line once calls arrive, and the
+policy card's heading shares a row with the profile choices, which returns two
+lines to the call list. Whether that is enough at the opening height has not been
+checked by looking; nothing has been verified beyond compiling and the test suite.
 
 ## 2. Enormous empty space, then a wall of it
 
